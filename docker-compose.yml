@@ -1,0 +1,50 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nyayo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nyayo
+      POSTGRES_PASSWORD: nyayo_secure_password
+      POSTGRES_DB: nyayo_sentinel
+    volumes:
+      - nyayo_pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nyayo-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgres://nyayo:nyayo_secure_password@postgres:5432/nyayo_sentinel
+      NODE_ENV: production
+    depends_on:
+      - postgres
+    ports:
+      - "4000:4000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: nyayo-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://backend:4000
+      NODE_ENV: production
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  nyayo_pgdata:
+    driver: local
+

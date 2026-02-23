@@ -1,0 +1,136 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  passwordHash   String
+  role           UserRole
+  countyId       String? 
+  mfaEnabled     Boolean  @default(true)
+  mfaSecret      String?
+  lastLoginAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  county         County?  @relation(fields: [countyId], references: [id])
+  auditLogs      AuditLog[]
+}
+
+enum UserRole {
+  NATIONAL_ADMIN
+  COUNTY_OFFICIAL
+  ANALYST
+}
+
+model County {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  code      String   @unique
+  region    String?
+
+  sentimentEvents SentimentEvent[]
+  alerts          Alert[]
+  alertThresholds AlertThreshold[]
+  users           User[]
+}
+
+model Topic {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  category  String?
+  isActive  Boolean  @default(true)
+
+  sentimentEvents SentimentEvent[]
+  alerts          Alert[]
+  alertThresholds AlertThreshold[]
+}
+
+model SentimentEvent {
+  id              String   @id @default(cuid())
+  countyId        String
+  topicId         String
+  timestamp       DateTime @default(now())
+  sentimentScore  Float
+  sentimentLabel  SentimentLabel
+  source          String
+  volumeWeight    Int      @default(1)
+
+  county          County   @relation(fields: [countyId], references: [id])
+  topic           Topic    @relation(fields: [topicId], references: [id])
+}
+
+enum SentimentLabel {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+}
+
+model AlertThreshold {
+  id           String         @id @default(cuid())
+  countyId     String?
+  topicId      String?
+  metricType   MetricType
+  thresholdVal Float
+  severity     AlertSeverity
+  active       Boolean        @default(true)
+
+  county       County?        @relation(fields: [countyId], references: [id])
+  topic        Topic?         @relation(fields: [topicId], references: [id])
+}
+
+enum MetricType {
+  NEGATIVE_PERCENT
+  SPIKE_FACTOR
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Alert {
+  id           String        @id @default(cuid())
+  countyId     String
+  topicId      String?
+  severity     AlertSeverity
+  triggerType  TriggerType
+  triggeredAt  DateTime      @default(now())
+  status       AlertStatus   @default(OPEN)
+  summary      String
+
+  county       County        @relation(fields: [countyId], references: [id])
+  topic        Topic?        @relation(fields: [topicId], references: [id])
+}
+
+enum TriggerType {
+  THRESHOLD
+  SPIKE
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  timestamp    DateTime @default(now())
+  action       String
+  resourceType String?
+  resourceId   String?
+  metadata     Json?
+
+  user         User?    @relation(fields: [userId], references: [id])
+}
+
