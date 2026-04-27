@@ -1,185 +1,205 @@
 Nyayo Sentinel Dashboard – Early Warning System
 ================================================
 
-Nyayo Sentinel Dashboard is a secure, production-ready government analytics platform for monitoring and visualizing public sentiment across Kenya. It is designed as an **early warning system** for emerging frustration, negative sentiment, or unrest, with county- and topic-level drill-downs and configurable alerting.
+A secure, production-ready government analytics platform for monitoring public sentiment across all 47 Kenyan counties. Designed as an **early warning system** for detecting emerging frustration, unrest, or spikes in negative sentiment, with county- and topic-level drill-downs, configurable alerting, and full audit logging.
 
-## High-Level Architecture
+---
 
-The system is split into three main layers:
+## Architecture
 
-- **Frontend (Next.js + React)**  
-  - Responsive, desktop-first dashboard UI  
-  - Role-aware navigation and component rendering (Admin, County Official, Analyst)  
-  - WebSocket (or polling) client for real-time sentiment and alert updates  
-  - PDF/CSV report generation and download
-
-- **Backend API (Node.js + Express + TypeScript)**  
-  - Secure REST API with JWT-based auth + MFA challenge/verification  
-  - RBAC enforcement middleware (National Admin, County Official, Analyst)  
-  - Sentiment ingestion endpoints (from external pipelines or manual inputs)  
-  - Analytics aggregation (national overview, county heatmap, topic breakdowns, historical trends)  
-  - Alert engine for threshold- and spike-based early warnings  
-  - Audit logging for logins, data access, configuration changes, and report exports
-
-- **Data & Infrastructure (PostgreSQL + Docker)**  
-  - PostgreSQL with encrypted storage (volume-level + optional column-level crypto)  
-  - Strict anonymization: sentiment events never store personal identifiers  
-  - Optional air-gapped deployment (no outbound internet, private networks only)  
-  - Reverse proxy / TLS termination (e.g. Nginx or government-managed load balancer)
-
-### Architecture Diagram (Logical)
-
-```mermaid
-flowchart LR
-    subgraph Client[Government Users]
-        A[Browser - National Admin / County Official / Analyst]
-    end
-
-    subgraph Frontend[Next.js Frontend]
-        B[React UI - Dashboard / Heatmap / Topics / Alerts / Reports]
-        WS[WebSocket Client]
-    end
-
-    subgraph API[Backend API Node.js Express]
-        G[Auth and MFA - JWT + RBAC]
-        H[Sentiment and Analytics - Aggregation Services]
-        I[Alert Engine - Threshold and Spike Detection]
-        J[Audit Logger]
-    end
-
-    subgraph DB[PostgreSQL Encrypted]
-        K[(Users and Roles)]
-        L[(Counties and Topics)]
-        M[(Sentiment Events)]
-        N[(Alerts and Thresholds)]
-        O[(Audit Logs)]
-    end
-
-    subgraph Integrations[Secure Integrations]
-        P[Email or SMS Gateway Gov Approved]
-        Q[External Data Pipelines Social Call Center]
-    end
-
-    A <--> B
-    B <--> WS
-    B -->|REST HTTPS| G
-    B -->|REST HTTPS| H
-    B -->|REST HTTPS| I
-
-    WS <--> I
-
-    G --> K
-    H --> L
-    H --> M
-    I --> M
-    I --> N
-    I --> P
-    J --> O
-
-    Q -->|ingest| H
+```
+Browser → Next.js Frontend (3000) → Express Backend (4000) → PostgreSQL (5432)
+                                           ↕ Socket.io (real-time alerts)
 ```
 
-## Data Model Overview
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Next.js 14 (App Router), React 18, TypeScript, Recharts, React Simple Maps |
+| Backend | Node.js 20, Express 4, TypeScript, Prisma 5, Socket.io 4 |
+| Database | PostgreSQL 16 |
+| Auth | JWT (access 15 min / refresh 7 days in httpOnly cookies), TOTP MFA via otplib |
+| Deployment | Docker + Docker Compose |
 
-- **User**
-  - `id`, `email`, `hashed_password`, `role`, `county_id?`, `mfa_enabled`, `mfa_secret?`, `last_login_at`
-- **County**
-  - `id`, `name`, `code`, `region`
-- **Topic**
-  - `id`, `name`, `category` (e.g., Land, Water, Healthcare), `is_active`
-- **SentimentEvent**
-  - `id`, `county_id`, `topic_id`, `timestamp`, `sentiment_score` (e.g., -1.0 to 1.0), `sentiment_label` (Positive/Neutral/Negative), `source` (e.g., social, call center), `volume_weight`
-  - **No personal identifiers stored** (no phone numbers, names, IDs, free-text PII)
-- **AlertThreshold**
-  - `id`, `county_id?`, `topic_id?`, `metric_type` (e.g., NEGATIVE_PERCENT, SPIKE_FACTOR), `threshold_value`, `severity`, `active`
-- **Alert**
-  - `id`, `county_id`, `topic_id?`, `severity`, `trigger_type` (threshold/spike), `triggered_at`, `status`, `summary`
-- **AuditLog**
-  - `id`, `user_id`, `timestamp`, `action` (LOGIN, VIEW_DASHBOARD, EXPORT_REPORT, UPDATE_THRESHOLD, etc.), `resource_type`, `resource_id?`, `metadata` (JSON, non-PII)
+---
 
-## Core Functional Modules
+## Quick Start
 
-- **Sentiment Overview Dashboard**
-  - National sentiment summary (positive/neutral/negative percentages)
-  - Real-time sentiment score indicator (rolling window average)
-  - Trend charts (daily/weekly/monthly)
-  - Top emerging negative topics
-  - Active alerts panel
+### Prerequisites
+- Docker & Docker Compose
+- Node.js 20+ (for local development)
 
-- **County-Level Heatmap**
-  - Interactive Kenya map by county with color gradient
-  - Hover: county name, sentiment score, top complaint topics, volume
-  - Click: drill down to county detail view
+### 1. Configure environment
 
-- **Topic Analysis**
-  - Topic-wise sentiment distribution
-  - Bar/pie charts for topic shares and sentiment labels
-  - Keyword/topic trend lines
-  - Filters: county, date range, topic, sentiment level
+Create `backend/.env`:
+```env
+DATABASE_URL=postgres://nyayo:nyayo_secure_password@localhost:5432/nyayo_sentinel
+NODE_ENV=development
+PORT=4000
+JWT_ACCESS_TOKEN_SECRET=change-me-in-production
+JWT_REFRESH_TOKEN_SECRET=change-me-in-production
+JWT_ACCESS_TOKEN_TTL=900
+JWT_REFRESH_TOKEN_TTL=604800
+ALLOWED_ORIGINS=http://localhost:3000
+MFA_ISSUER=NyayoSentinel
+```
 
-- **Early Warning Alerts**
-  - Threshold-based (e.g., negative sentiment > X% for Y days)
-  - Spike-based (change vs baseline exceeds factor)
-  - Alert severity levels: Low, Medium, High, Critical
-  - Notification integrations (Email/SMS/internal)
-  - Alert history with acknowledgment and resolution tracking
+Create `frontend/.env.local`:
+```env
+NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
+```
 
-- **Analytics & Reports**
-  - Export national or county-level summaries as PDF/CSV
-  - Weekly/monthly reports and historical trend analysis
-  - Comparative county performance views
+### 2. Start the database
+```bash
+docker-compose up -d postgres
+```
 
-## Security & Compliance Design
+### 3. Run migrations and seed sample data
+```bash
+cd backend
+npm install
+npm run prisma:migrate   # apply schema migrations
+npm run prisma:seed      # load 47 counties, 12 topics, 7 users, ~12,000 events
+```
 
-- **Authentication & MFA**
-  - Username/password with strong password policy
-  - MFA via TOTP (authenticator app) or OTP (SMS/email via secure gateway)
-  - Short-lived access tokens (JWT) + refresh tokens stored securely (HTTP-only cookies)
+### 4. Start the services
+```bash
+# Terminal 1 – backend
+cd backend && npm run dev
 
-- **RBAC**
-  - `National Admin`: full access across all counties and settings
-  - `County Official`: restricted to assigned county data and alerts
-  - `Analyst`: read-only analytics across authorized scope
-  - Enforcement via middleware on each route and UI-level guards
+# Terminal 2 – frontend
+cd frontend && npm install && npm run dev
+```
 
-- **Privacy & Anonymization**
-  - No storage of national IDs, phone numbers, names, free-text that could directly identify individuals
-  - Aggregated analytics only; raw events are stripped of PII before ingestion
-  - Retention policies and purge mechanisms for old sentiment events and logs
+Open **http://localhost:3000** → redirects to the login page.
 
-- **Encryption**
-  - HTTPS/TLS for all traffic in production (via reverse proxy/load balancer)
-  - Encrypted volumes for PostgreSQL
-  - Optional column-level encryption for sensitive configuration or secrets
+### Full Docker stack (production-like)
+```bash
+docker-compose up -d     # builds and starts all three services
+docker-compose down      # tear down
+docker-compose logs -f   # stream logs
+```
 
-- **Audit Logging**
-  - Logs for authentication, data access, admin changes, threshold updates, and exports
-  - Immutable, append-only design (or periodic export to WORM storage)
+---
 
-- **Kenya Data Protection Act, 2019**
-  - Data minimization, purpose limitation, and transparency baked into design
-  - Role-based access, strict logging, and no PII storage for sentiment events
-  - Support for Data Protection Impact Assessments (DPIA) and subject rights via processes
+## Seed Credentials
 
-- **Air-Gapped Deployment**
-  - All services deployable in a closed network with no outbound connectivity
-  - External notification gateways can be replaced by on-premise SMS/Email gateways
-  - Docker-based deployment for reproducibility
+All test accounts use password **`Nyayo2024!`**
 
-## Project Structure 
+| Email | Role | Scope |
+|-------|------|-------|
+| `admin@sentinel.ke` | National Admin | All 47 counties |
+| `analyst@sentinel.ke` | Analyst | All counties (read-only) |
+| `nairobi.official@county.ke` | County Official | Nairobi only |
+| `mombasa.official@county.ke` | County Official | Mombasa only |
+| `kisumu.official@county.ke` | County Official | Kisumu only |
+| `nakuru.official@county.ke` | County Official | Nakuru only |
 
-```text
+---
+
+## Features
+
+### Authentication & Access Control
+- Login page with email/password and optional TOTP MFA
+- Role-based navigation — sidebar links are scoped per role:
+  - **National Admin**: Dashboard, Heatmap, Topics, Alerts, Reports, Admin
+  - **Analyst**: Dashboard, Heatmap, Topics, Alerts, Reports
+  - **County Official**: Dashboard, Heatmap, Topics, Alerts (county-scoped data only)
+- HTTP-only cookie tokens with transparent refresh on 401
+- Audit log on every sensitive action (2xx only, KDPA-compliant)
+
+### Sentiment Overview Dashboard
+- National sentiment distribution (positive / neutral / negative %)
+- Rolling average sentiment score
+- 7-day trend chart
+- Top 5 emerging negative topics
+
+### County Heatmap
+- Interactive Kenya map — counties shaded by negative sentiment intensity
+- Hover tooltip: score, negative share, event volume
+- Sortable county data table
+
+### Topic Analysis
+- Stacked bar chart of sentiment distribution per topic
+- Per-topic count breakdown table
+
+### Early Warning Alerts
+- Real-time alerts pushed over Socket.io (scoped to user's county)
+- Acknowledge and Resolve buttons with optimistic UI updates
+- Pagination (20 per page)
+- Two trigger types: `THRESHOLD` (negative %) and `SPIKE` (volume factor)
+
+### Reports
+- Authenticated CSV download: Weekly Summary, County Comparison
+- Downloads sent via axios blob (auth cookies included)
+
+### Admin Panel *(National Admin only)*
+- View and create alert thresholds
+- Configure metric type (NEGATIVE_PERCENT 0–100 or SPIKE_FACTOR >1), severity, county, topic
+
+---
+
+## Project Structure
+
+```
 nyayo-sentinel-dashboard/
-  frontend/          # Next.js + React UI
-  backend/           # Node.js + Express API
-  docker-compose.yml # Frontend, backend, Postgres services
-  README.md
+├── frontend/
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── (auth)/login/   # Login page (no sidebar)
+│   │   │   ├── (dashboard)/    # All protected pages + layout
+│   │   │   ├── globals.css
+│   │   │   └── layout.tsx      # Root layout (html/body + Inter font)
+│   │   ├── components/
+│   │   │   ├── AuthGuard.tsx   # Redirects unauthenticated users to /login
+│   │   │   ├── Sidebar.tsx     # Role-aware nav + logout
+│   │   │   ├── Topbar.tsx      # Page title + open alert count
+│   │   │   └── KenyaHeatmap.tsx
+│   │   └── lib/
+│   │       ├── api.ts          # Axios instance + 401 refresh interceptor
+│   │       ├── auth.ts         # localStorage user store (getUser/setUser/clearUser)
+│   │       └── socket.ts       # Socket.io client (cookie auth)
+│   └── Dockerfile
+├── backend/
+│   ├── src/
+│   │   ├── server.ts           # Express + Socket.io + alert evaluation loop
+│   │   ├── routes/             # auth, dashboard, counties, topics, alerts, reports
+│   │   ├── middleware/
+│   │   │   ├── auth.ts         # JWT verification + RBAC
+│   │   │   └── audit.ts        # Append-only audit logging (2xx only)
+│   │   ├── config/env.ts       # Zod-validated environment config
+│   │   └── lib/prisma.ts       # Prisma singleton
+│   ├── prisma/
+│   │   ├── schema.prisma       # Data model + performance indexes
+│   │   ├── seed.ts             # 47 counties, 12 topics, 7 users, 30-day events
+│   │   └── migrations/
+│   └── Dockerfile
+├── docker-compose.yml
+└── README.md
 ```
 
-Subsequent files in this repository implement:
+---
 
-- Secure authentication with MFA hooks and RBAC
-- Sentiment ingestion, analytics, and visualization APIs
-- Alert logic and notification integration points
-- Audit logging and compliance-aligned behaviors
+## Data Model
 
+| Model | Key fields |
+|-------|-----------|
+| `User` | email, passwordHash, role (NATIONAL_ADMIN / COUNTY_OFFICIAL / ANALYST), countyId? |
+| `County` | name, code (001–047), region |
+| `Topic` | name, category, isActive |
+| `SentimentEvent` | countyId, topicId, timestamp, sentimentScore (-1→1), sentimentLabel, source — **no PII** |
+| `AlertThreshold` | metricType, thresholdVal, severity, countyId?, topicId? |
+| `Alert` | countyId, topicId?, severity, triggerType, status (OPEN/ACKNOWLEDGED/RESOLVED) |
+| `AuditLog` | userId?, action, resourceType, metadata (JSON) |
+
+Indexes: `SentimentEvent(timestamp)`, `SentimentEvent(countyId)`, `SentimentEvent(topicId)`, `Alert(status)`, `Alert(countyId)`.
+
+---
+
+## Security Notes
+
+- All JWT secrets in `.env` must be rotated before production deployment
+- The default Docker Compose password (`nyayo_secure_password`) is for local dev only
+- Socket.io connections require a valid access token cookie — unauthenticated connections are rejected
+- Login endpoint is rate-limited to 15 requests per 15 minutes
+- MFA setup (`POST /auth/mfa/setup`) requires authentication and can only be called for the requesting user's own account
+- `SentimentEvent` must never store names, phone numbers, national IDs, or any free-text PII

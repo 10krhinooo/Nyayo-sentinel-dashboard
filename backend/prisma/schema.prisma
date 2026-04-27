@@ -36,9 +36,22 @@ model County {
   region    String?
 
   sentimentEvents SentimentEvent[]
+  constituencies  Constituency[]
   alerts          Alert[]
   alertThresholds AlertThreshold[]
   users           User[]
+}
+
+model Constituency {
+  id       String @id @default(cuid())
+  name     String
+  code     String @unique
+  countyId String
+
+  county          County           @relation(fields: [countyId], references: [id])
+  sentimentEvents SentimentEvent[]
+
+  @@index([countyId])
 }
 
 model Topic {
@@ -53,17 +66,24 @@ model Topic {
 }
 
 model SentimentEvent {
-  id              String   @id @default(cuid())
-  countyId        String
-  topicId         String
-  timestamp       DateTime @default(now())
-  sentimentScore  Float
-  sentimentLabel  SentimentLabel
-  source          String
-  volumeWeight    Int      @default(1)
+  id               String        @id @default(cuid())
+  countyId         String
+  topicId          String
+  constituencyId   String?
+  timestamp        DateTime      @default(now())
+  sentimentScore   Float
+  sentimentLabel   SentimentLabel
+  source           String
+  volumeWeight     Int           @default(1)
 
-  county          County   @relation(fields: [countyId], references: [id])
-  topic           Topic    @relation(fields: [topicId], references: [id])
+  county           County        @relation(fields: [countyId], references: [id])
+  topic            Topic         @relation(fields: [topicId], references: [id])
+  constituency     Constituency? @relation(fields: [constituencyId], references: [id])
+
+  @@index([timestamp])
+  @@index([countyId])
+  @@index([topicId])
+  @@index([constituencyId])
 }
 
 enum SentimentLabel {
@@ -109,6 +129,9 @@ model Alert {
 
   county       County        @relation(fields: [countyId], references: [id])
   topic        Topic?        @relation(fields: [topicId], references: [id])
+
+  @@index([status])
+  @@index([countyId])
 }
 
 enum TriggerType {

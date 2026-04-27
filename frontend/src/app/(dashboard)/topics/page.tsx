@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api } from "../../lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "../../../lib/api";
 import {
   BarChart,
   Bar,
@@ -28,15 +28,15 @@ interface TopicsResponse {
 export default function TopicsPage() {
   const [data, setData] = useState<TopicSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
       try {
         const res = await api.get<TopicsResponse>("/topics/summary");
         setData(res.data.topics);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("Failed to load topics", err);
+      } catch {
+        setError("Failed to load topic data. Please refresh the page.");
       } finally {
         setLoading(false);
       }
@@ -44,23 +44,30 @@ export default function TopicsPage() {
     void load();
   }, []);
 
-  const chartData = data.map((t) => ({
-    name: t.name,
-    Positive: t.counts.POSITIVE,
-    Neutral: t.counts.NEUTRAL,
-    Negative: t.counts.NEGATIVE
-  }));
+  const chartData = useMemo(
+    () =>
+      data.map((t) => ({
+        name: t.name,
+        Positive: t.counts.POSITIVE,
+        Neutral: t.counts.NEUTRAL,
+        Negative: t.counts.NEGATIVE
+      })),
+    [data]
+  );
 
   return (
     <>
       <h1 className="page-title">Topic Analysis</h1>
+
+      {error && <div className="error-banner">{error}</div>}
+
       <div className="two-column">
         <div className="card">
           <p className="card-subtitle">
             Topic sentiment distribution across Positive, Neutral, and Negative categories.
           </p>
-          {loading && <div>Loading topics...</div>}
-          {!loading && (
+          {loading && <div className="skeleton-block" style={{ height: 280 }} />}
+          {!loading && !error && (
             <div style={{ height: 280 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData}>
@@ -79,8 +86,9 @@ export default function TopicsPage() {
 
         <div className="card">
           <p className="card-subtitle">Detailed topic counts by sentiment label.</p>
-          {loading && <div>Loading topics...</div>}
-          {!loading && (
+          {loading && <div className="skeleton-block" style={{ height: 280 }} />}
+          {!loading && !error && (
+            <div className="table-wrapper">
             <table className="table">
               <thead>
                 <tr>
@@ -108,10 +116,10 @@ export default function TopicsPage() {
                 )}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>
     </>
   );
 }
-

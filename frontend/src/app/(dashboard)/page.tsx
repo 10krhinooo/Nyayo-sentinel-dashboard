@@ -1,8 +1,8 @@
- "use client";
+"use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { api, type SentimentOverview } from "../lib/api";
+import { api, type SentimentOverview } from "../../lib/api";
 import {
   LineChart,
   Line,
@@ -15,18 +15,20 @@ import {
   Cell
 } from "recharts";
 
+const PIE_COLORS = ["#2f855a", "#718096", "#c53030"];
+
 export default function DashboardPage() {
   const [data, setData] = useState<SentimentOverview | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
       try {
         const res = await api.get<SentimentOverview>("/dashboard/overview");
         setData(res.data);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("Failed to load dashboard", err);
+      } catch {
+        setError("Failed to load dashboard data. Please refresh the page.");
       } finally {
         setLoading(false);
       }
@@ -34,22 +36,22 @@ export default function DashboardPage() {
     void load();
   }, []);
 
-  const trendData =
-    data?.trendByDay.map((d) => ({
-      day: d.day,
-      score: d.avg_score
-    })) ?? [];
+  const trendData = useMemo(
+    () => data?.trendByDay.map((d) => ({ day: d.day, score: d.avg_score })) ?? [],
+    [data]
+  );
 
-  const pieData =
-    data == null
-      ? []
-      : [
-          { name: "Positive", value: data.distribution.positive },
-          { name: "Neutral", value: data.distribution.neutral },
-          { name: "Negative", value: data.distribution.negative }
-        ];
-
-  const PIE_COLORS = ["#2f855a", "#718096", "#c53030"];
+  const pieData = useMemo(
+    () =>
+      data == null
+        ? []
+        : [
+            { name: "Positive", value: data.distribution.positive },
+            { name: "Neutral", value: data.distribution.neutral },
+            { name: "Negative", value: data.distribution.negative }
+          ],
+    [data]
+  );
 
   return (
     <>
@@ -68,8 +70,17 @@ export default function DashboardPage() {
         </div>
       </div>
       <h1 className="page-title">National Sentiment Overview</h1>
-      {loading && <div>Loading dashboard...</div>}
-      {!loading && data && (
+
+      {error && <div className="error-banner">{error}</div>}
+
+      {loading && (
+        <div>
+          <div className="skeleton-block" style={{ height: 100, marginBottom: "1rem" }} />
+          <div className="skeleton-block" style={{ height: 260 }} />
+        </div>
+      )}
+
+      {!loading && !error && data && (
         <>
           <section className="card-grid">
             <div className="card">
@@ -167,4 +178,3 @@ export default function DashboardPage() {
     </>
   );
 }
-
