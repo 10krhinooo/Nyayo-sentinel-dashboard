@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { ComposableMap, Geographies, Geography } from "react-simple-maps";
 
 export interface HeatmapCounty {
@@ -9,15 +9,39 @@ export interface HeatmapCounty {
   avgScore: number;
   negativeRatio: number;
   volume: number;
-  
 }
 
 interface Props {
   data: HeatmapCounty[];
+  zoomToCounty?: string;
 }
 
-// Path to  county-level GeoJSON
-const geoUrl = "geo/kenya-counties.geojson";
+const geoUrl = "/geo/kenya-counties.geojson";
+const KENYA_SCALE = 2500;
+const KENYA_SPAN_DEG = 14;
+
+interface ProjConfig { center: [number, number]; scale: number; }
+
+function computeBboxFromFeatures(features: GeoJSON.Feature[]): ProjConfig {
+  let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+  for (const feat of features) {
+    const geom = feat.geometry as GeoJSON.Polygon | GeoJSON.MultiPolygon;
+    const rings: GeoJSON.Position[][] =
+      geom.type === "Polygon" ? geom.coordinates : geom.coordinates.flat();
+    for (const ring of rings) {
+      for (const [lon, lat] of ring) {
+        if (lon < minLon) minLon = lon;
+        if (lon > maxLon) maxLon = lon;
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+      }
+    }
+  }
+  const center: [number, number] = [(minLon + maxLon) / 2, (minLat + maxLat) / 2];
+  const span = Math.max(maxLon - minLon, maxLat - minLat, 0.05);
+  const scale = Math.round(KENYA_SCALE * (KENYA_SPAN_DEG / span) * 0.75);
+  return { center, scale };
+}
 
 // Red color gradient for negative sentiment
 function colorForNegativeRatio(ratio: number) {
@@ -30,8 +54,30 @@ function colorForNegativeRatio(ratio: number) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-export const KenyaHeatmap: React.FC<Props> = ({ data }) => {
-  // Create a map of countyName -> county data for quick lookup
+export const KenyaHeatmap: React.FC<Props> = ({ data, zoomToCounty }) => {
+  const [projConfig, setProjConfig] = useState<ProjConfig>({
+    center: [37.9062, -0.0236],
+    scale: KENYA_SCALE,
+  });
+
+  useEffect(() => {
+    if (!zoomToCounty) {
+      setProjConfig({ center: [37.9062, -0.0236], scale: KENYA_SCALE });
+      return;
+    }
+    fetch(geoUrl)
+      .then((r) => r.json())
+      .then((geo: GeoJSON.FeatureCollection) => {
+        const features = geo.features.filter(
+          (f) =>
+            (f.properties?.COUNTY_NAM as string)?.toUpperCase() ===
+            zoomToCounty.toUpperCase()
+        );
+        if (features.length > 0) setProjConfig(computeBboxFromFeatures(features));
+      })
+      .catch(() => {});
+  }, [zoomToCounty]);
+
   const countyMap = useMemo(() => {
     const map = new Map<string, HeatmapCounty>();
     data.forEach((county) => {
@@ -42,10 +88,10 @@ export const KenyaHeatmap: React.FC<Props> = ({ data }) => {
 
   return (
     <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start" }}>
-      <div style={{ width: "700px" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
         <ComposableMap
           projection="geoMercator"
-          projectionConfig={{ center: [37.9062, -0.0236], scale: 2500 }}
+          projectionConfig={projConfig}
           style={{
             width: "100%",
             height: "auto",

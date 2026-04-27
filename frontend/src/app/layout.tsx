@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { Sidebar } from "../components/Sidebar";
-import { Topbar } from "../components/Topbar";
 
 export const metadata: Metadata = {
   title: "Nyayo Sentinel Dashboard",
@@ -11,16 +9,15 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>
-        <div className="layout-root">
-          <Sidebar />
-          <div className="main-content">
-            <Topbar />
-            <main className="page-container">{children}</main>
-          </div>
-        </div>
-      </body>
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body>{children}</body>
     </html>
   );
 }
-

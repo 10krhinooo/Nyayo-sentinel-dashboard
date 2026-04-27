@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { AlertSeverity, AlertStatus, MetricType, TriggerType, UserRole } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { authenticate, requireRoles } from "../middleware/auth";
@@ -6,21 +7,38 @@ import { audit } from "../middleware/audit";
 
 const router = Router();
 
+const PAGE_LIMIT = 20;
+
 router.get(
   "/",
   authenticate(true),
   audit("VIEW_ALERTS", "ALERT"),
   async (req, res) => {
-    const where: any = {};
-    if (req.user?.role === UserRole.COUNTY_OFFICIAL && req.user.countyId) {
-      where.countyId = req.user.countyId;
+    try {
+      const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+      const limit = Math.max(1, Math.min(100, parseInt(String(req.query.limit ?? String(PAGE_LIMIT)), 10) || PAGE_LIMIT));
+      const skip = (page - 1) * limit;
+
+      const where: { countyId?: string } = {};
+      if (req.user?.role === UserRole.COUNTY_OFFICIAL && req.user.countyId) {
+        where.countyId = req.user.countyId;
+      }
+
+      const [alerts, total] = await Promise.all([
+        prisma.alert.findMany({
+          where,
+          orderBy: { triggeredAt: "desc" },
+          include: { county: true, topic: true },
+          skip,
+          take: limit
+        }),
+        prisma.alert.count({ where })
+      ]);
+
+      return res.json({ alerts, total, page, limit });
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
     }
-    const alerts = await prisma.alert.findMany({
-      where,
-      orderBy: { triggeredAt: "desc" },
-      include: { county: true, topic: true }
-    });
-    return res.json({ alerts });
   }
 );
 
@@ -30,12 +48,32 @@ router.get(
   requireRoles([UserRole.NATIONAL_ADMIN]),
   audit("VIEW_ALERT_THRESHOLDS", "ALERT_THRESHOLD"),
   async (_req, res) => {
-    const thresholds = await prisma.alertThreshold.findMany({
-      include: { county: true, topic: true }
-    });
-    return res.json({ thresholds });
+    try {
+      const thresholds = await prisma.alertThreshold.findMany({
+        include: { county: true, topic: true }
+      });
+      return res.json({ thresholds });
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
   }
 );
+
+const thresholdSchema = z.object({
+  countyId: z.string().optional(),
+  topicId: z.string().optional(),
+  metricType: z.nativeEnum(MetricType),
+  thresholdVal: z.number().refine((v) => v > 0, { message: "thresholdVal must be positive" }),
+  severity: z.nativeEnum(AlertSeverity),
+  active: z.boolean().optional()
+}).superRefine((data, ctx) => {
+  if (data.metricType === MetricType.NEGATIVE_PERCENT && (data.thresholdVal < 0 || data.thresholdVal > 100)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "NEGATIVE_PERCENT must be between 0 and 100", path: ["thresholdVal"] });
+  }
+  if (data.metricType === MetricType.SPIKE_FACTOR && data.thresholdVal <= 1) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "SPIKE_FACTOR must be greater than 1", path: ["thresholdVal"] });
+  }
+});
 
 router.post(
   "/thresholds",
@@ -43,42 +81,55 @@ router.post(
   requireRoles([UserRole.NATIONAL_ADMIN]),
   audit("UPDATE_ALERT_THRESHOLDS", "ALERT_THRESHOLD"),
   async (req, res) => {
-    const { countyId, topicId, metricType, thresholdVal, severity, active } = req.body as {
-      countyId?: string;
-      topicId?: string;
-      metricType: MetricType;
-      thresholdVal: number;
-      severity: AlertSeverity;
-      active?: boolean;
-    };
-
-    const threshold = await prisma.alertThreshold.create({
-      data: {
-        countyId: countyId ?? null,
-        topicId: topicId ?? null,
-        metricType,
-        thresholdVal,
-        severity,
-        active: active ?? true
+    try {
+      const parsed = thresholdSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
       }
-    });
 
-    return res.status(201).json({ threshold });
+      const { countyId, topicId, metricType, thresholdVal, severity, active } = parsed.data;
+      const threshold = await prisma.alertThreshold.create({
+        data: {
+          countyId: countyId ?? null,
+          topicId: topicId ?? null,
+          metricType,
+          thresholdVal,
+          severity,
+          active: active ?? true
+        }
+      });
+
+      return res.status(201).json({ threshold });
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
   }
 );
+
+const statusSchema = z.object({
+  status: z.nativeEnum(AlertStatus)
+});
 
 router.patch(
   "/:id/status",
   authenticate(),
   audit("UPDATE_ALERT_STATUS", "ALERT"),
   async (req, res) => {
-    const { id } = req.params;
-    const { status } = req.body as { status: "OPEN" | "ACKNOWLEDGED" | "RESOLVED" };
-    const alert = await prisma.alert.update({
-      where: { id },
-      data: { status }
-    });
-    return res.json({ alert });
+    try {
+      const parsed = statusSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid status", errors: parsed.error.flatten().fieldErrors });
+      }
+
+      const { id } = req.params;
+      const alert = await prisma.alert.update({
+        where: { id },
+        data: { status: parsed.data.status }
+      });
+      return res.json({ alert });
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
   }
 );
 
@@ -90,20 +141,24 @@ export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
   const now = new Date();
   const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
+  // Fetch distinct county IDs once, reuse across all thresholds
+  const allCountyIds = (
+    await prisma.sentimentEvent.findMany({
+      where: { timestamp: { gte: oneDayAgo } },
+      select: { countyId: true },
+      distinct: ["countyId"]
+    })
+  ).map((r) => r.countyId);
+
   for (const th of thresholds) {
-    const countyIdsToEvaluate = th.countyId
-      ? [th.countyId]
-      : (
-          await prisma.sentimentEvent.findMany({
-            where: { timestamp: { gte: oneDayAgo } },
-            select: { countyId: true },
-            distinct: ["countyId"]
-          })
-        ).map((r) => r.countyId);
+    const countyIdsToEvaluate = th.countyId ? [th.countyId] : allCountyIds;
 
     if (th.metricType === MetricType.NEGATIVE_PERCENT) {
       for (const countyId of countyIdsToEvaluate) {
-        const where: any = { timestamp: { gte: oneDayAgo }, countyId };
+        const where: { timestamp: object; countyId: string; topicId?: string } = {
+          timestamp: { gte: oneDayAgo },
+          countyId
+        };
         if (th.topicId) where.topicId = th.topicId;
 
         const [negCount, totalCount] = await Promise.all([
@@ -116,15 +171,13 @@ export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
         const percent = totalCount === 0 ? 0 : (100 * negCount) / totalCount;
         if (percent < th.thresholdVal) continue;
 
-        // Deduplicate: if an active (OPEN/ACKNOWLEDGED) alert already exists, don't create a new one
         const existing = await prisma.alert.findFirst({
           where: {
             countyId,
             topicId: th.topicId ?? null,
             triggerType: TriggerType.THRESHOLD,
             status: { in: [AlertStatus.OPEN, AlertStatus.ACKNOWLEDGED] }
-          },
-          orderBy: { triggeredAt: "desc" }
+          }
         });
         if (existing) continue;
 
@@ -137,15 +190,27 @@ export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
             summary: `Negative sentiment ${percent.toFixed(1)}% exceeded threshold ${th.thresholdVal}%`
           }
         });
-        io?.emit("alert:new", alert);
+
+        if (io) {
+          io.sockets.sockets.forEach((socket) => {
+            const socketUser = socket.data.user as { countyId?: string | null } | undefined;
+            if (!socketUser) return;
+            if (socketUser.countyId == null || socketUser.countyId === countyId) {
+              socket.emit("alert:new", alert);
+            }
+          });
+        }
       }
     }
 
     if (th.metricType === MetricType.SPIKE_FACTOR) {
       const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
       for (const countyId of countyIdsToEvaluate) {
-        const recentWhere: any = { timestamp: { gte: oneDayAgo }, countyId };
-        const baselineWhere: any = {
+        const recentWhere: { timestamp: object; countyId: string; topicId?: string } = {
+          timestamp: { gte: oneDayAgo },
+          countyId
+        };
+        const baselineWhere: { timestamp: object; countyId: string; topicId?: string } = {
           timestamp: { gte: twoDaysAgo, lt: oneDayAgo },
           countyId
         };
@@ -170,8 +235,7 @@ export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
             topicId: th.topicId ?? null,
             triggerType: TriggerType.SPIKE,
             status: { in: [AlertStatus.OPEN, AlertStatus.ACKNOWLEDGED] }
-          },
-          orderBy: { triggeredAt: "desc" }
+          }
         });
         if (existing) continue;
 
@@ -184,11 +248,19 @@ export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
             summary: `Complaint volume spiked by factor ${factor.toFixed(2)} (threshold ${th.thresholdVal}x)`
           }
         });
-        io?.emit("alert:new", alert);
+
+        if (io) {
+          io.sockets.sockets.forEach((socket) => {
+            const socketUser = socket.data.user as { countyId?: string | null } | undefined;
+            if (!socketUser) return;
+            if (socketUser.countyId == null || socketUser.countyId === countyId) {
+              socket.emit("alert:new", alert);
+            }
+          });
+        }
       }
     }
   }
 }
 
 export default router;
-
