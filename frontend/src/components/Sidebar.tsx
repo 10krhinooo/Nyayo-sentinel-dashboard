@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { getUser, clearUser } from "../lib/auth";
-import { api } from "../lib/api";
+import { api, clearCsrfToken } from "../lib/api";
 import { disconnectSocket } from "../lib/socket";
 import { useSidebar } from "../lib/sidebarContext";
 
@@ -112,6 +112,7 @@ export function Sidebar() {
     } catch {
       // proceed regardless
     }
+    clearCsrfToken();
     disconnectSocket();
     clearUser();
     router.push("/login");

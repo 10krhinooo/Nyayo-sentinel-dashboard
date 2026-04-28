@@ -20,7 +20,10 @@ const envSchema = z.object({
   NOTIFY_SMS_SENDER: z.string().optional(),
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
-  FRONTEND_URL: z.string().url().default("http://localhost:3000")
+  FRONTEND_URL: z.string().url().default("http://localhost:3000"),
+
+  SCRAPER_API_KEY: z.string().min(32).optional(),
+  INGEST_RATE_LIMIT_RPM: z.string().default("10")
 });
 
 const parsed = envSchema.safeParse(process.env);

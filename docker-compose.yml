@@ -43,7 +43,24 @@ services:
     ports:
       - "3000:3000"
 
+  scraper:
+    build:
+      context: ./scraper
+      dockerfile: Dockerfile
+    container_name: nyayo-scraper
+    restart: unless-stopped
+    env_file:
+      - ./scraper/.env
+    environment:
+      INGEST_URL: http://backend:4000/api/ingest/events
+    volumes:
+      - nyayo_scraper_data:/data
+    depends_on:
+      - backend
+
 volumes:
   nyayo_pgdata:
+    driver: local
+  nyayo_scraper_data:
     driver: local
 

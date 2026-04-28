@@ -55,3 +55,16 @@ Thumbs.db
 
 
 .codex
+
+# =========================
+# Scraper
+# =========================
+scraper/.env
+scraper/.env.*
+!scraper/.env.example
+scraper/.venv/
+scraper/__pycache__/
+scraper/**/__pycache__/
+scraper/*.pyc
+scraper/*.db
+scraper/models/
