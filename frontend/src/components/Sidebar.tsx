@@ -77,6 +77,17 @@ const ALL_LINKS = [
         <path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M12 2v2M12 20v2M4.93 19.07l1.41-1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2"/>
       </svg>
     )
+  },
+  {
+    href: "/profile",
+    label: "Profile",
+    roles: ["NATIONAL_ADMIN", "COUNTY_OFFICIAL", "ANALYST"] as Role[],
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+        <circle cx="12" cy="7" r="4"/>
+      </svg>
+    )
   }
 ];
 

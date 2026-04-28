@@ -16,6 +16,7 @@ import topicsRoutes from "./routes/topics";
 import alertsRoutes, { evaluateAlertThresholds } from "./routes/alerts";
 import reportsRoutes from "./routes/reports";
 import usersRoutes from "./routes/users";
+import profileRoutes from "./routes/profile";
 
 const app = express();
 
@@ -50,6 +51,7 @@ app.use("/api/topics", topicsRoutes);
 app.use("/api/alerts", alertsRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/users", usersRoutes);
+app.use("/api/profile", profileRoutes);
 
 const server = http.createServer(app);
 

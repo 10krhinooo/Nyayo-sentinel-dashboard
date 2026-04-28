@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { UserRole } from "@prisma/client";
-import bcrypt from "bcryptjs";
+import { randomUUID } from "crypto";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { authenticate, requireRoles } from "../middleware/auth";
 import { audit } from "../middleware/audit";
+import { sendInviteEmail } from "../services/email";
 
 const router = Router();
 
@@ -12,14 +13,13 @@ const adminOnly = [authenticate(true), requireRoles([UserRole.NATIONAL_ADMIN])];
 
 const createUserSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8),
   role: z.nativeEnum(UserRole),
-  countyId: z.string().optional(),
+  countyCode: z.string().optional(),
 });
 
 const updateUserSchema = z.object({
   role: z.nativeEnum(UserRole).optional(),
-  countyId: z.string().nullable().optional(),
+  countyCode: z.string().nullable().optional(),
 });
 
 // GET /users
@@ -33,11 +33,14 @@ router.get(
         select: {
           id: true,
           email: true,
+          firstName: true,
+          lastName: true,
           role: true,
           countyId: true,
           mfaEnabled: true,
+          mustSetPassword: true,
           createdAt: true,
-          county: { select: { name: true } },
+          county: { select: { name: true, code: true } },
         },
         orderBy: { createdAt: "asc" },
       });
@@ -48,7 +51,7 @@ router.get(
   }
 );
 
-// POST /users
+// POST /users — creates user and sends invite email
 router.post(
   "/",
   ...adminOnly,
@@ -58,10 +61,19 @@ router.post(
     if (!parsed.success) {
       return res.status(400).json({ message: "Invalid input", errors: parsed.error.flatten() });
     }
-    const { email, password, role, countyId } = parsed.data;
+    const { email, role, countyCode } = parsed.data;
 
-    if (role === UserRole.COUNTY_OFFICIAL && !countyId) {
+    if (role === UserRole.COUNTY_OFFICIAL && !countyCode) {
       return res.status(400).json({ message: "County officials must be assigned a county." });
+    }
+
+    let resolvedCountyId: string | null = null;
+    if (countyCode) {
+      const county = await prisma.county.findUnique({ where: { code: countyCode } });
+      if (!county) {
+        return res.status(400).json({ message: `County code "${countyCode}" not found.` });
+      }
+      resolvedCountyId = county.id;
     }
 
     const existing = await prisma.user.findUnique({ where: { email } });
@@ -69,19 +81,27 @@ router.post(
       return res.status(409).json({ message: "A user with that email already exists." });
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const inviteToken = randomUUID();
+    const inviteTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
     try {
       const user = await prisma.user.create({
         data: {
           email,
-          passwordHash,
+          passwordHash: "",
           role,
-          countyId: countyId ?? null,
-          mfaEnabled: false,
+          countyId: resolvedCountyId,
+          mfaEnabled: true,
+          mustSetPassword: true,
+          inviteToken,
+          inviteTokenExpiry
         },
         select: { id: true, email: true, role: true, countyId: true, createdAt: true },
       });
-      return res.status(201).json({ user });
+
+      await sendInviteEmail(email, inviteToken);
+
+      return res.status(201).json({ user, invited: true });
     } catch {
       return res.status(500).json({ message: "Internal server error" });
     }
@@ -105,14 +125,27 @@ router.patch(
       return res.status(400).json({ message: "Invalid input", errors: parsed.error.flatten() });
     }
 
-    const { role, countyId } = parsed.data;
+    const { role, countyCode } = parsed.data;
+
+    let resolvedCountyId: string | null | undefined;
+    if (countyCode !== undefined) {
+      if (countyCode === null) {
+        resolvedCountyId = null;
+      } else {
+        const county = await prisma.county.findUnique({ where: { code: countyCode } });
+        if (!county) {
+          return res.status(400).json({ message: `County code "${countyCode}" not found.` });
+        }
+        resolvedCountyId = county.id;
+      }
+    }
 
     try {
       const user = await prisma.user.update({
         where: { id },
         data: {
           ...(role !== undefined ? { role } : {}),
-          ...(countyId !== undefined ? { countyId } : {}),
+          ...(resolvedCountyId !== undefined ? { countyId: resolvedCountyId } : {}),
         },
         select: { id: true, email: true, role: true, countyId: true, county: { select: { name: true } } },
       });

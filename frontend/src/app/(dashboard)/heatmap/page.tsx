@@ -5,6 +5,7 @@ import { api } from "../../../lib/api";
 import { getUser } from "../../../lib/auth";
 import { KenyaHeatmap, type HeatmapCounty } from "../../../components/KenyaHeatmap";
 import { ConstituencyHeatmap, type ConstituencyData } from "../../../components/ConstituencyHeatmap";
+import { SubCountyHeatmap, type SubCountyData } from "../../../components/SubCountyHeatmap";
 
 interface HeatmapResponse {
   counties: HeatmapCounty[];
@@ -12,6 +13,10 @@ interface HeatmapResponse {
 
 interface ConstituencyResponse {
   constituencies: ConstituencyData[];
+}
+
+interface SubCountyResponse {
+  subcounties: SubCountyData[];
 }
 
 export default function HeatmapPage() {
@@ -23,6 +28,9 @@ export default function HeatmapPage() {
   const [countyName, setCountyName] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [drillDown, setDrillDown] = useState<{ countyId: string; countyName: string } | null>(null);
+  const [subCountyData, setSubCountyData] = useState<SubCountyData[]>([]);
+  const [subCountyLoading, setSubCountyLoading] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -50,10 +58,25 @@ export default function HeatmapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function handleCountyClick(countyId: string, name: string) {
+    setDrillDown({ countyId, countyName: name });
+    setSubCountyLoading(true);
+    try {
+      const res = await api.get<SubCountyResponse>(`/counties/${countyId}/subcounties/heatmap`);
+      setSubCountyData(res.data.subcounties);
+    } catch {
+      setSubCountyData([]);
+    } finally {
+      setSubCountyLoading(false);
+    }
+  }
+
   return (
     <>
       <h1 className="page-title">
-        {isCountyOfficial && countyName
+        {drillDown
+          ? `${drillDown.countyName} — Subcounties`
+          : isCountyOfficial && countyName
           ? `${countyName} County Heatmap`
           : "County-Level Sentiment Heatmap"}
       </h1>
@@ -108,21 +131,70 @@ export default function HeatmapPage() {
         </div>
       )}
 
-      {/* National heatmap — zoomed to county for county officials */}
+      {/* National heatmap — zoomed to county for county officials, with subcounty drill-down */}
       <div className="card">
-        {isCountyOfficial && countyName && (
-          <div className="card-title" style={{ color: "var(--color-muted)" }}>
-            {countyName} — County Map View
-          </div>
-        )}
+        <div className="card-title">
+          {drillDown
+            ? `${drillDown.countyName} — Subcounty View`
+            : isCountyOfficial && countyName
+            ? `${countyName} — County Map View`
+            : "Kenya — Click a county to see its subcounties"}
+        </div>
         {loading ? (
           <>
             <div className="skeleton-block" style={{ height: 400, marginBottom: "1rem" }} />
             <div className="skeleton-block" style={{ height: 120 }} />
           </>
+        ) : drillDown ? (
+          <>
+            {subCountyLoading ? (
+              <div className="skeleton-block" style={{ height: 400, marginBottom: "1rem" }} />
+            ) : (
+              <SubCountyHeatmap
+                countyName={drillDown.countyName}
+                data={subCountyData}
+                onBack={() => { setDrillDown(null); setSubCountyData([]); }}
+              />
+            )}
+            <div style={{ marginTop: "1rem" }}>
+              <div className="table-wrapper">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Subcounty</th>
+                      <th>Sentiment Score</th>
+                      <th>Negative Share</th>
+                      <th>Volume</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {subCountyData
+                      .sort((a, b) => b.negativeRatio - a.negativeRatio)
+                      .map((s) => (
+                        <tr key={s.subCountyId}>
+                          <td>{s.name}</td>
+                          <td>{s.avgScore.toFixed(2)}</td>
+                          <td>{Math.round(s.negativeRatio * 100)}%</td>
+                          <td>{s.volume}</td>
+                        </tr>
+                      ))}
+                    {subCountyData.length === 0 && (
+                      <tr>
+                        <td colSpan={4}>No subcounty data available yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
         ) : (
           <>
-            <KenyaHeatmap data={data} zoomToCounty={isCountyOfficial ? countyName : undefined} />
+            <KenyaHeatmap
+              data={data}
+              zoomToCounty={isCountyOfficial ? countyName : undefined}
+              onCountyClick={handleCountyClick}
+            />
             <div style={{ marginTop: "1rem" }}>
               <div className="table-wrapper">
                 <table className="table">

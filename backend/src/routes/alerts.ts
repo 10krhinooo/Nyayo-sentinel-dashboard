@@ -4,6 +4,7 @@ import { AlertSeverity, AlertStatus, MetricType, TriggerType, UserRole } from "@
 import { prisma } from "../lib/prisma";
 import { authenticate, requireRoles } from "../middleware/auth";
 import { audit } from "../middleware/audit";
+import { sendAlertEmail } from "../services/email";
 
 const router = Router();
 
@@ -188,7 +189,8 @@ export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
             severity: th.severity,
             triggerType: TriggerType.THRESHOLD,
             summary: `Negative sentiment ${percent.toFixed(1)}% exceeded threshold ${th.thresholdVal}%`
-          }
+          },
+          include: { county: true, topic: true }
         });
 
         if (io) {
@@ -200,6 +202,8 @@ export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
             }
           });
         }
+
+        void notifyAlertRecipients(alert);
       }
     }
 
@@ -246,7 +250,8 @@ export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
             severity: th.severity,
             triggerType: TriggerType.SPIKE,
             summary: `Complaint volume spiked by factor ${factor.toFixed(2)} (threshold ${th.thresholdVal}x)`
-          }
+          },
+          include: { county: true, topic: true }
         });
 
         if (io) {
@@ -258,8 +263,26 @@ export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
             }
           });
         }
+
+        void notifyAlertRecipients(alert);
       }
     }
+  }
+}
+
+async function notifyAlertRecipients(alert: { id: string; countyId: string; summary: string; severity: string; triggeredAt: Date; county?: { name: string } | null; topic?: { name: string } | null }) {
+  const recipients = await prisma.user.findMany({
+    where: {
+      OR: [
+        { role: UserRole.NATIONAL_ADMIN },
+        { role: UserRole.COUNTY_OFFICIAL, countyId: alert.countyId }
+      ]
+    },
+    select: { email: true }
+  });
+  const emails = recipients.map((u) => u.email);
+  if (emails.length > 0) {
+    await sendAlertEmail(emails, alert);
   }
 }
 

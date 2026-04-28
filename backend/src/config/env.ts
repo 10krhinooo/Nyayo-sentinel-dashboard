@@ -17,7 +17,10 @@ const envSchema = z.object({
   MFA_ISSUER: z.string().default("NyayoSentinel"),
 
   NOTIFY_EMAIL_FROM: z.string().optional(),
-  NOTIFY_SMS_SENDER: z.string().optional()
+  NOTIFY_SMS_SENDER: z.string().optional(),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  FRONTEND_URL: z.string().url().default("http://localhost:3000")
 });
 
 const parsed = envSchema.safeParse(process.env);

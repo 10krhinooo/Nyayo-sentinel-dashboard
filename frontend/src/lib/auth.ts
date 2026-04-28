@@ -1,6 +1,8 @@
 export interface AuthUser {
   id: string;
   email: string;
+  firstName?: string | null;
+  lastName?: string | null;
   role: "NATIONAL_ADMIN" | "COUNTY_OFFICIAL" | "ANALYST";
   countyId: string | null;
 }
