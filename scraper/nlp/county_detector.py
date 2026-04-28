@@ -4,26 +4,26 @@ from config import COUNTY_NAMES
 
 # County-specific aliases and common references
 _ALIASES: dict[str, list[str]] = {
-    "Nairobi":           ["nairobi", "nbi", "the capital"],
-    "Mombasa":           ["mombasa", "msa", "the coast", "coastal city"],
+    "Nairobi":           ["nairobi", "nbi", "the capital", "jiji la nairobi", "mji mkuu"],
+    "Mombasa":           ["mombasa", "msa", "the coast", "coastal city", "bandari", "pwani"],
     "Murang'a":          ["murang'a", "muranga"],
     "Taita-Taveta":      ["taita-taveta", "taita taveta", "taita"],
     "Tana River":        ["tana river", "tana"],
     "Trans-Nzoia":       ["trans-nzoia", "trans nzoia"],
-    "Uasin Gishu":       ["uasin gishu", "eldoret"],      # Eldoret is the county seat
+    "Uasin Gishu":       ["uasin gishu", "eldoret"],
     "Elgeyo-Marakwet":   ["elgeyo-marakwet", "elgeyo marakwet", "iten"],
     "West Pokot":        ["west pokot", "kapenguria"],
     "Homa Bay":          ["homa bay", "homabay"],
     "Tharaka-Nithi":     ["tharaka-nithi", "tharaka nithi"],
-    "Kisumu":            ["kisumu", "lakeside city", "lake victoria city"],
-    "Nakuru":            ["nakuru", "nakuru city"],
+    "Kisumu":            ["kisumu", "lakeside city", "lake victoria city", "ziwa victoria", "pwani ya ziwa"],
+    "Nakuru":            ["nakuru", "nakuru city", "bonde la ufa"],
     "Kisii":             ["kisii", "gusii"],
     "Kakamega":          ["kakamega", "western kenya"],
     "Machakos":          ["machakos", "macha"],
-    "Kiambu":            ["kiambu", "thika"],             # Thika is a major town in Kiambu
+    "Kiambu":            ["kiambu", "thika"],
     "Nyeri":             ["nyeri", "mt kenya region"],
     "Garissa":           ["garissa", "nep"],
-    "Turkana":           ["turkana", "lodwar"],
+    "Turkana":           ["turkana", "lodwar", "bonde la turkana"],
     "Mandera":           ["mandera"],
     "Wajir":             ["wajir"],
     "Marsabit":          ["marsabit"],
@@ -48,9 +48,9 @@ _ALIASES: dict[str, list[str]] = {
     "Nandi":             ["nandi", "kapsabet"],
     "Baringo":           ["baringo", "kabarnet"],
     "Samburu":           ["samburu", "maralal"],
-    "Lamu":              ["lamu"],
+    "Lamu":              ["lamu", "kisiwa cha lamu"],
     "Kwale":             ["kwale", "diani"],
-    "Kilifi":            ["kilifi", "malindi"],
+    "Kilifi":            ["kilifi", "malindi", "watamu"],
     "Tharaka-Nithi":     ["tharaka", "chuka"],
 }
 

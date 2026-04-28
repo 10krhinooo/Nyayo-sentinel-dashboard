@@ -15,6 +15,9 @@ FEEDS = [
     ("standard_media",  "https://www.standardmedia.co.ke/rss/kenya.xml"),
     ("citizen_tv",      "https://citizentv.co.ke/feed/"),
     ("kbc",             "https://www.kbc.co.ke/feed/"),
+    # Swahili-language sources
+    ("taifa_leo",       "https://taifaleodaily.co.ke/feed/"),
+    ("kbc_kiswahili",   "https://www.kbc.co.ke/category/kiswahili/feed/"),
 ]
 
 _HEADERS = {
