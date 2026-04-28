@@ -97,4 +97,53 @@ router.get(
   }
 );
 
+// GET /counties/:countyId/subcounties/heatmap
+router.get(
+  "/:countyId/subcounties/heatmap",
+  authenticate(true),
+  audit("VIEW_SUBCOUNTY_HEATMAP", "SENTIMENT"),
+  async (req, res) => {
+    const { countyId } = req.params;
+
+    if (
+      req.user?.role === UserRole.COUNTY_OFFICIAL &&
+      req.user.countyId !== countyId
+    ) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    try {
+      const results = await prisma.$queryRaw<
+        { sub_county_id: string; avg_score: number; negative_ratio: number; volume: bigint }[]
+      >`SELECT
+          "subCountyId" as sub_county_id,
+          AVG("sentimentScore") as avg_score,
+          AVG(CASE WHEN "sentimentLabel" = 'NEGATIVE' THEN 1 ELSE 0 END) as negative_ratio,
+          COUNT(*) as volume
+        FROM "SentimentEvent"
+        WHERE "countyId" = ${countyId}
+          AND "subCountyId" IS NOT NULL
+          AND "timestamp" >= NOW() - INTERVAL '30 days'
+        GROUP BY "subCountyId"`;
+
+      const subCountyIds = results.map((r) => r.sub_county_id);
+      const subCounties = await prisma.subCounty.findMany({
+        where: { id: { in: subCountyIds } },
+      });
+
+      const data = results.map((r) => ({
+        subCountyId: r.sub_county_id,
+        name: subCounties.find((s) => s.id === r.sub_county_id)?.name ?? "Unknown",
+        avgScore: Number(r.avg_score),
+        negativeRatio: Number(r.negative_ratio),
+        volume: Number(r.volume),
+      }));
+
+      return res.json({ subcounties: data });
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
 export default router;

@@ -8,19 +8,28 @@ datasource db {
 }
 
 model User {
-  id             String   @id @default(cuid())
-  email          String   @unique
-  passwordHash   String
-  role           UserRole
-  countyId       String? 
-  mfaEnabled     Boolean  @default(true)
-  mfaSecret      String?
-  lastLoginAt    DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                String    @id @default(cuid())
+  email             String    @unique
+  passwordHash      String
+  role              UserRole
+  countyId          String?
+  firstName         String?
+  lastName          String?
+  mfaEnabled        Boolean   @default(true)
+  mfaSecret         String?
+  otpCode           String?
+  otpExpiry         DateTime?
+  inviteToken       String?
+  inviteTokenExpiry DateTime?
+  mustSetPassword   Boolean   @default(false)
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+  lastLoginAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  county         County?  @relation(fields: [countyId], references: [id])
-  auditLogs      AuditLog[]
+  county            County?   @relation(fields: [countyId], references: [id])
+  auditLogs         AuditLog[]
 }
 
 enum UserRole {
@@ -37,12 +46,25 @@ model County {
 
   sentimentEvents SentimentEvent[]
   constituencies  Constituency[]
+  subCounties     SubCounty[]
   alerts          Alert[]
   alertThresholds AlertThreshold[]
   users           User[]
 }
 
 model Constituency {
+  id       String @id @default(cuid())
+  name     String
+  code     String @unique
+  countyId String
+
+  county          County           @relation(fields: [countyId], references: [id])
+  sentimentEvents SentimentEvent[]
+
+  @@index([countyId])
+}
+
+model SubCounty {
   id       String @id @default(cuid())
   name     String
   code     String @unique
@@ -70,6 +92,7 @@ model SentimentEvent {
   countyId         String
   topicId          String
   constituencyId   String?
+  subCountyId      String?
   timestamp        DateTime      @default(now())
   sentimentScore   Float
   sentimentLabel   SentimentLabel
@@ -79,11 +102,13 @@ model SentimentEvent {
   county           County        @relation(fields: [countyId], references: [id])
   topic            Topic         @relation(fields: [topicId], references: [id])
   constituency     Constituency? @relation(fields: [constituencyId], references: [id])
+  subCounty        SubCounty?    @relation(fields: [subCountyId], references: [id])
 
   @@index([timestamp])
   @@index([countyId])
   @@index([topicId])
   @@index([constituencyId])
+  @@index([subCountyId])
 }
 
 enum SentimentLabel {

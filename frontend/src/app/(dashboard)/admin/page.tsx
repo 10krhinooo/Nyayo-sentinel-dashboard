@@ -26,8 +26,9 @@ interface UserRecord {
   role: Role;
   countyId: string | null;
   mfaEnabled: boolean;
+  mustSetPassword: boolean;
   createdAt: string;
-  county?: { name: string } | null;
+  county?: { name: string; code: string } | null;
 }
 
 // ─── Threshold tab ────────────────────────────────────────────────────────────
@@ -168,7 +169,7 @@ function ThresholdsTab() {
 
 // ─── Users tab ────────────────────────────────────────────────────────────────
 
-const defaultUserForm = { email: "", password: "", role: "ANALYST" as Role, countyId: "" };
+const defaultUserForm = { email: "", role: "ANALYST" as Role, countyCode: "" };
 
 function UsersTab() {
   const currentUser = getUser();
@@ -179,8 +180,9 @@ function UsersTab() {
   const [form, setForm] = useState(defaultUserForm);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<{ role: Role; countyId: string }>({ role: "ANALYST", countyId: "" });
+  const [editForm, setEditForm] = useState<{ role: Role; countyCode: string }>({ role: "ANALYST", countyCode: "" });
 
   async function loadUsers() {
     setLoading(true);
@@ -204,12 +206,13 @@ function UsersTab() {
     try {
       await api.post("/users", {
         email: form.email,
-        password: form.password,
         role: form.role,
-        countyId: form.role === "COUNTY_OFFICIAL" ? form.countyId || undefined : undefined,
+        countyCode: form.role === "COUNTY_OFFICIAL" ? form.countyCode || undefined : undefined,
       });
+      setFormSuccess(`Invite sent to ${form.email}. Please ask the user to check their email inbox (including spam) to set their password.`);
       setForm(defaultUserForm);
       setShowForm(false);
+      setTimeout(() => setFormSuccess(null), 5000);
       await loadUsers();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -223,7 +226,7 @@ function UsersTab() {
     try {
       await api.patch(`/users/${id}`, {
         role: editForm.role,
-        countyId: editForm.role === "COUNTY_OFFICIAL" ? editForm.countyId || null : null,
+        countyCode: editForm.role === "COUNTY_OFFICIAL" ? editForm.countyCode || null : null,
       });
       setEditingId(null);
       await loadUsers();
@@ -251,6 +254,12 @@ function UsersTab() {
   return (
     <>
       {error && <div className="error-banner">{error}</div>}
+      {formSuccess && (
+        <div style={{ background: "#dcfce7", color: "#15803d", padding: "0.75rem 1rem", borderRadius: "0.4rem", marginBottom: "1rem", fontSize: "0.875rem", borderLeft: "4px solid #16a34a", display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><polyline points="20 6 9 17 4 12"/></svg>
+          <span>{formSuccess}</span>
+        </div>
+      )}
 
       <div className="card" style={{ marginBottom: "1.5rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
@@ -263,13 +272,12 @@ function UsersTab() {
         {showForm && (
           <form onSubmit={(e) => void handleCreate(e)} style={{ display: "flex", flexDirection: "column", gap: "0.75rem", maxWidth: 480, marginBottom: "1.5rem", padding: "1rem", background: "var(--color-bg)", borderRadius: "0.5rem" }}>
             {formError && <div className="error-banner">{formError}</div>}
+            <div style={{ fontSize: "0.8rem", color: "var(--color-muted)", padding: "0.5rem 0.75rem", background: "#eff6ff", borderRadius: "0.375rem", border: "1px solid #bfdbfe" }}>
+              An invite email will be sent to the user so they can set their own password.
+            </div>
             <label>
               <span className="form-label">Email</span>
               <input className="form-input" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} required placeholder="user@example.ke" />
-            </label>
-            <label>
-              <span className="form-label">Password (min 8 characters)</span>
-              <input className="form-input" type="password" value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} required minLength={8} />
             </label>
             <label>
               <span className="form-label">Role</span>
@@ -281,11 +289,11 @@ function UsersTab() {
             </label>
             {form.role === "COUNTY_OFFICIAL" && (
               <label>
-                <span className="form-label">County ID</span>
-                <input className="form-input" type="text" value={form.countyId} onChange={(e) => setForm((f) => ({ ...f, countyId: e.target.value }))} placeholder="County cuid (required for County Official)" required />
+                <span className="form-label">County Code</span>
+                <input className="form-input" type="text" value={form.countyCode} onChange={(e) => setForm((f) => ({ ...f, countyCode: e.target.value }))} placeholder="e.g. 047 for Nairobi" required />
               </label>
             )}
-            <button type="submit" className="btn-primary" disabled={submitting}>{submitting ? "Creating…" : "Create User"}</button>
+            <button type="submit" className="btn-primary" disabled={submitting}>{submitting ? "Sending invite…" : "Send Invite"}</button>
           </form>
         )}
 
@@ -319,15 +327,15 @@ function UsersTab() {
                     </td>
                     <td>
                       {editingId === u.id && editForm.role === "COUNTY_OFFICIAL" ? (
-                        <input className="form-input" style={{ padding: "0.2rem 0.4rem", fontSize: "0.8rem", width: 140 }}
-                          value={editForm.countyId}
-                          onChange={(e) => setEditForm((f) => ({ ...f, countyId: e.target.value }))}
-                          placeholder="County cuid" />
+                        <input className="form-input" style={{ padding: "0.2rem 0.4rem", fontSize: "0.8rem", width: 80 }}
+                          value={editForm.countyCode}
+                          onChange={(e) => setEditForm((f) => ({ ...f, countyCode: e.target.value }))}
+                          placeholder="e.g. 047" />
                       ) : (
                         u.county?.name ?? "—"
                       )}
                     </td>
-                    <td>{u.mfaEnabled ? "Enabled" : "Off"}</td>
+                    <td>{u.mustSetPassword ? <span style={{ color: "var(--color-warning)", fontSize: "0.8rem" }}>Invite pending</span> : u.mfaEnabled ? "Enabled" : "Off"}</td>
                     <td>{new Date(u.createdAt).toLocaleDateString()}</td>
                     <td>
                       {u.id === currentUser?.id ? (
@@ -340,7 +348,7 @@ function UsersTab() {
                       ) : (
                         <div style={{ display: "flex", gap: "0.4rem" }}>
                           <button className="btn-secondary" style={{ padding: "0.2rem 0.6rem", fontSize: "0.8rem" }}
-                            onClick={() => { setEditingId(u.id); setEditForm({ role: u.role, countyId: u.countyId ?? "" }); }}>
+                            onClick={() => { setEditingId(u.id); setEditForm({ role: u.role, countyCode: u.county?.code ?? "" }); }}>
                             Edit
                           </button>
                           <button style={{ padding: "0.2rem 0.6rem", fontSize: "0.8rem", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "0.375rem", cursor: "pointer" }}

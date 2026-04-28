@@ -22,7 +22,8 @@ const PAGE_TITLES: Record<string, string> = {
   "/topics":  "Topic Analysis",
   "/alerts":  "Early Warning Alerts",
   "/reports": "Analytics & Reports",
-  "/admin":   "Admin Panel"
+  "/admin":   "Admin Panel",
+  "/profile": "My Profile"
 };
 
 export function Topbar() {

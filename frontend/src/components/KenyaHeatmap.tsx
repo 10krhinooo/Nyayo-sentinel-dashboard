@@ -14,6 +14,7 @@ export interface HeatmapCounty {
 interface Props {
   data: HeatmapCounty[];
   zoomToCounty?: string;
+  onCountyClick?: (countyId: string, countyName: string) => void;
 }
 
 const geoUrl = "/geo/kenya-counties.geojson";
@@ -54,7 +55,7 @@ function colorForNegativeRatio(ratio: number) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-export const KenyaHeatmap: React.FC<Props> = ({ data, zoomToCounty }) => {
+export const KenyaHeatmap: React.FC<Props> = ({ data, zoomToCounty, onCountyClick }) => {
   const [projConfig, setProjConfig] = useState<ProjConfig>({
     center: [37.9062, -0.0236],
     scale: KENYA_SCALE,
@@ -117,11 +118,16 @@ export const KenyaHeatmap: React.FC<Props> = ({ data, zoomToCounty }) => {
                     fill={fillColor}
                     stroke="#ffffff"
                     strokeWidth={0.5}
+                    onClick={() => {
+                      if (countyData && onCountyClick)
+                        onCountyClick(countyData.countyId, countyData.countyName);
+                    }}
                     style={{
-                      default: { outline: "none" },
+                      default: { outline: "none", cursor: countyData && onCountyClick ? "pointer" : "default" },
                       hover: {
                         fill: countyData ? "#ff4d4d" : "#f0f0f0",
                         outline: "none",
+                        cursor: countyData && onCountyClick ? "pointer" : "default",
                       },
                       pressed: { outline: "none" },
                     }}

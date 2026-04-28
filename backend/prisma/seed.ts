@@ -191,7 +191,68 @@ async function main() {
     constitByCounty.set(c.countyId, list);
   }
 
-  // 3. Topics
+  // 3. SubCounties — extracted from GADM Level 2 GeoJSON
+  const subGeoPath = path.resolve(__dirname, "../../frontend/public/geo/kenya-subcounties.geojson");
+  const subGeojson = JSON.parse(fs.readFileSync(subGeoPath, "utf-8")) as {
+    features: Array<{ properties: { NAME_1: string; NAME_2: string; CC_2: string } }>;
+  };
+
+  // Normalise GADM NAME_1 to match DB county names
+  const GADM_COUNTY_MAP: Record<string, string> = {
+    HomaBay: "Homa Bay",
+    TaitaTaveta: "Taita-Taveta",
+    TanaRiver: "Tana River",
+    TransNzoia: "Trans-Nzoia",
+    UasinGishu: "Uasin Gishu",
+    WestPokot: "West Pokot",
+  };
+
+  function splitCamelCase(s: string): string {
+    return s.replace(/(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/g, " ");
+  }
+
+  // De-duplicate subcounties by (countyName, name) pair; filter bad features
+  const subMap = new Map<string, { name: string; code: string; countyName: string }>();
+  let subIndex = 0;
+  for (const feat of subGeojson.features) {
+    const { NAME_1, NAME_2, CC_2 } = feat.properties;
+    if (!NAME_2 || /^\d+$/.test(NAME_2) || NAME_2.startsWith("unknown")) continue;
+    const dbCountyName = GADM_COUNTY_MAP[NAME_1] ?? NAME_1;
+    const displayName = splitCamelCase(NAME_2);
+    const key = `${dbCountyName}::${displayName}`;
+    if (!subMap.has(key)) {
+      subMap.set(key, {
+        name: displayName,
+        code: `sub-${CC_2 || subIndex++}`,
+        countyName: dbCountyName,
+      });
+    }
+  }
+
+  const subCountyRecords = await Promise.all(
+    Array.from(subMap.values()).map(({ name, code, countyName }) => {
+      const county = countyByName.get(
+        [...countyByName.keys()].find((k) => k.toUpperCase() === countyName.toUpperCase()) ?? ""
+      );
+      if (!county) return null;
+      return prisma.subCounty.upsert({
+        where: { code },
+        update: { name, countyId: county.id },
+        create: { name, code, countyId: county.id },
+      });
+    })
+  );
+  const validSubCounties = subCountyRecords.filter(Boolean) as Awaited<ReturnType<typeof prisma.subCounty.upsert>>[];
+  console.log(`  ✓ ${validSubCounties.length} subcounties`);
+
+  const subCountyByCounty = new Map<string, typeof validSubCounties>();
+  for (const s of validSubCounties) {
+    const list = subCountyByCounty.get(s.countyId) ?? [];
+    list.push(s);
+    subCountyByCounty.set(s.countyId, list);
+  }
+
+  // 4. Topics
   const topicRecords = await Promise.all(
     TOPICS.map((t) =>
       prisma.topic.upsert({
@@ -286,10 +347,18 @@ async function main() {
             ? pick(countyConstits).id
             : undefined;
 
+        // 50% of events get a subcounty assignment
+        const countySubs = subCountyByCounty.get(county.id) ?? [];
+        const subCountyId =
+          countySubs.length > 0 && Math.random() < 0.5
+            ? pick(countySubs).id
+            : undefined;
+
         batch.push({
           countyId:       county.id,
           topicId:        topic.id,
           constituencyId: constituencyId ?? null,
+          subCountyId:    subCountyId ?? null,
           timestamp:      ts,
           sentimentScore: Math.round(score * 1000) / 1000,
           sentimentLabel: label,
