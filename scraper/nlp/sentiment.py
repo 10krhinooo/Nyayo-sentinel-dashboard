@@ -4,7 +4,7 @@ from typing import TypedDict
 _lock = threading.Lock()
 _pipe = None
 
-MODEL_NAME = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+MODEL_NAME = "cardiffnlp/twitter-xlm-roberta-base-sentiment"
 
 
 def _get_pipeline():
