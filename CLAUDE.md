@@ -23,9 +23,17 @@ npx prisma migrate dev --name <name>  # Create + apply a new migration (dev mode
 npm run prisma:seed       # Load sample data (47 counties, 12 topics, 7 users, ~12k events)
 ```
 
+### Scraper (`scraper/`)
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install torch==2.3.1+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+python main.py            # runs immediately, then every SCRAPE_INTERVAL_MINUTES
+```
+
 ### Full Stack (Docker)
 ```bash
-docker-compose up -d      # Start PostgreSQL (5432) + Backend (4000) + Frontend (3000)
+docker-compose up -d      # Start PostgreSQL + Backend + Frontend + Scraper
 docker-compose down       # Stop all services
 docker-compose logs -f    # Stream logs
 ```
@@ -45,6 +53,16 @@ MFA_ISSUER=NyayoSentinel
 SMTP_USER=nyayo.sentinel@gmail.com
 SMTP_PASS=<gmail-app-password>
 FRONTEND_URL=http://localhost:3000
+SCRAPER_API_KEY=<min-32-char-random-string>
+INGEST_RATE_LIMIT_RPM=10
+```
+
+**`scraper/.env`** (not committed — copy from `scraper/.env.example`):
+```
+SCRAPER_API_KEY=<same value as backend>
+INGEST_URL=http://localhost:4000/api/ingest/events
+SCRAPE_INTERVAL_MINUTES=60
+DEDUP_DB_PATH=scraper_dedup.db
 ```
 
 **`frontend/.env.local`**:
@@ -106,15 +124,17 @@ app/
 
 ## Backend (`backend/src/`)
 
-- **`server.ts`** — Express app, Socket.io (with JWT handshake auth), rate limiter on `/api/auth/login`, 5-minute alert evaluation loop. Registers `/api/profile` route.
+- **`server.ts`** — Express app, Socket.io (with JWT handshake auth), rate limiter on `/api/auth/login`, 5-minute alert evaluation loop. Registers `/api/profile` and `/api/ingest` routes.
 - **`routes/auth.ts`** — Login (password verify → email OTP for mfaEnabled users, direct login for mfaEnabled=false), `POST /verify-otp`, `POST /set-password` (invite), `POST /forgot-password`, `POST /reset-password`, token refresh, logout.
 - **`routes/users.ts`** — Admin-only. `POST /users` generates invite token + sends invite email (no password set by admin). Accepts `countyCode` (e.g. `"047"`) and resolves to countyId. `PATCH` and `DELETE` unchanged.
 - **`routes/profile.ts`** — `GET /profile`, `PATCH /profile` (firstName/lastName), `POST /profile/change-password`. All require `authenticate()`.
 - **`routes/alerts.ts`** — GET with pagination, POST threshold, PATCH status, `evaluateAlertThresholds()` (emails county officials + national admins on new alert).
+- **`routes/ingest.ts`** — `POST /api/ingest/events`: batch ingest endpoint for the scraper. Uses `requireApiKey` (not JWT). Accepts up to 500 events per request, resolves county/topic names to IDs, bulk-inserts `SentimentEvent` rows. Rate-limited at 10 req/min separately from the login limiter.
 - **`services/email.ts`** — Nodemailer Gmail SMTP transporter. Functions: `sendInviteEmail`, `sendOtpEmail`, `sendAlertEmail`, `sendPasswordChangedEmail`, `sendPasswordResetEmail`, `sendWelcomeEmail`. Logs a warning and skips silently if SMTP_USER/SMTP_PASS are not set.
 - **`middleware/auth.ts`** — `authenticate(optional?)`: reads JWT from `Authorization: Bearer` header or `nyayo_access_token` cookie. `requireRoles(roles[])`: RBAC check.
+- **`middleware/apiKey.ts`** — `requireApiKey`: reads `X-API-Key` header, compares to `env.SCRAPER_API_KEY` using `crypto.timingSafeEqual`. Returns 503 if key not configured, 401 if wrong.
 - **`middleware/audit.ts`** — Logs to `AuditLog` only on 2xx responses. Captures `resourceId` from `req.params.id`.
-- **`config/env.ts`** — Zod-parsed env. Always import `env` from here — never use `process.env` directly in routes. Exports `SMTP_USER`, `SMTP_PASS`, `FRONTEND_URL`.
+- **`config/env.ts`** — Zod-parsed env. Always import `env` from here — never use `process.env` directly in routes. Exports `SMTP_USER`, `SMTP_PASS`, `FRONTEND_URL`, `SCRAPER_API_KEY`, `INGEST_RATE_LIMIT_RPM`.
 
 ### Auth flow (2FA)
 - `POST /auth/login`: verify password → if `mustSetPassword`, return `requiresPasswordSetup: true` → if `mfaEnabled: false` (seed users), issue tokens directly → if `mfaEnabled: true` (new users), generate bcrypt-hashed OTP, store with 10-min expiry, email user, return `requiresOtp: true`.
@@ -134,6 +154,21 @@ app/
 3. For each threshold × county: runs aggregate COUNT queries, checks against threshold, deduplicates on `OPEN|ACKNOWLEDGED` status, creates `Alert`, emits `alert:new` via Socket.io, emails county officials + national admins.
 
 Socket emit is county-scoped: sockets where `socket.data.user.countyId === alert.countyId` or `countyId === null` (national admins/analysts) receive it.
+
+### Scraper service (`scraper/`)
+
+- **`main.py`** — Scheduler loop. Calls each scraper, runs NLP pipeline per article, builds event dicts, calls `post_events()`. Runs immediately on start, then every `SCRAPE_INTERVAL_MINUTES`.
+- **`config.py`** — Reads `.env`, defines `COUNTY_NAMES` (47) and `TOPIC_NAMES` (12) as Python lists. These must stay in sync with `prisma/seed.ts`.
+- **`dedup.py`** — SQLite-backed URL deduplication. `is_seen(url)` / `mark_seen(url)` / `purge_old(days=30)`. DB path from `DEDUP_DB_PATH` env var.
+- **`ingest_client.py`** — POSTs event batches to `INGEST_URL` with `X-API-Key` header. Chunks at 500 events. Logs full response body on error.
+- **`nlp/sentiment.py`** — Lazy-loaded `cardiffnlp/twitter-roberta-base-sentiment-latest` pipeline. `analyze(text)` returns `{label, score}` where score = `positive_prob - negative_prob` ∈ [-1, 1].
+- **`nlp/county_detector.py`** — Regex word-boundary matching against 47 county names + aliases. Returns first matched canonical name or `None`.
+- **`nlp/topic_detector.py`** — Keyword matching for 12 topics. Returns a list — one article can match multiple topics, producing one `SentimentEvent` per `(county, topic)` pair.
+- **`scrapers/rss_feeds.py`** — feedparser + requests/BeautifulSoup for Nation Africa, Standard Media, Citizen TV, KBC RSS feeds.
+- **`scrapers/reddit_kenya.py`** — Reddit public JSON API (`/r/Kenya/new.json`). No credentials required.
+- **`train/finetune.py`** — Phase 2 script. Run manually after collecting ~1,500 human-labeled articles. Fine-tunes `Davlan/afro-xlmr-large` (English + Swahili).
+
+Timestamps sent to the backend must use `strftime("%Y-%m-%dT%H:%M:%SZ")` format — Zod's `.datetime()` requires `Z` suffix, not `+00:00`.
 
 ### Data model invariants
 - `SentimentEvent` must never store PII (no names, IDs, phone numbers, free text).

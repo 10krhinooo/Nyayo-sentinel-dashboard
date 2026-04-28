@@ -1,13 +1,15 @@
 Nyayo Sentinel Dashboard – Early Warning System
 ================================================
 
-A secure, production-ready government analytics platform for monitoring public sentiment across all 47 Kenyan counties. Designed as an **early warning system** for detecting emerging frustration, unrest, or spikes in negative sentiment, with county- and topic-level drill-downs, real-time alerting, email notifications, and full audit logging.
+A secure, production-ready government analytics platform for monitoring public sentiment across all 47 Kenyan counties. Designed as an **early warning system** for detecting emerging frustration, unrest, or spikes in negative sentiment, with county- and topic-level drill-downs, real-time alerting, email notifications, automated web scraping, and full audit logging.
 
 ---
 
 ## Architecture
 
 ```
+Kenyan News / Reddit → Python Scraper (NLP) → POST /api/ingest/events
+                                                        ↓
 Browser → Next.js Frontend (3000) → Express Backend (4000) → PostgreSQL (5432)
                                            ↕ Socket.io (real-time alerts)
                                            ↕ Gmail SMTP (email notifications)
@@ -20,6 +22,7 @@ Browser → Next.js Frontend (3000) → Express Backend (4000) → PostgreSQL (5
 | Database | PostgreSQL 16 |
 | Auth | JWT (access 15 min / refresh 7 days, httpOnly cookies), Email OTP 2FA |
 | Email | Gmail SMTP via Nodemailer (invite, 2FA OTP, alerts, password reset) |
+| Scraper | Python 3.12, HuggingFace Transformers, feedparser, requests |
 | Deployment | Docker + Docker Compose |
 
 ---
@@ -46,9 +49,21 @@ MFA_ISSUER=NyayoSentinel
 SMTP_USER=your-gmail@gmail.com
 SMTP_PASS=your-gmail-app-password
 FRONTEND_URL=http://localhost:3000
+SCRAPER_API_KEY=<random-string-min-32-chars>
+INGEST_RATE_LIMIT_RPM=10
 ```
 
 > **Gmail App Password**: In your Google account go to Security → 2-Step Verification → App passwords. Use the 16-character password generated there as `SMTP_PASS`. Do **not** use your normal Gmail password.
+
+> **Scraper API Key**: Generate with `python3 -c "import secrets; print(secrets.token_hex(24))"`. Use the same value in `scraper/.env`.
+
+Create `scraper/.env` (copy from `scraper/.env.example`):
+```env
+SCRAPER_API_KEY=<same-value-as-backend>
+INGEST_URL=http://localhost:4000/api/ingest/events
+SCRAPE_INTERVAL_MINUTES=60
+DEDUP_DB_PATH=scraper_dedup.db
+```
 
 Create `frontend/.env.local`:
 ```env
@@ -79,9 +94,20 @@ cd frontend && npm install && npm run dev
 
 Open **http://localhost:3000** → redirects to the login page.
 
+### 5. Run the scraper (optional — for live data)
+```bash
+cd scraper
+python3 -m venv .venv && source .venv/bin/activate
+pip install torch==2.3.1+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+python main.py
+```
+
+The scraper runs immediately on start, then every 60 minutes. It fetches articles from Kenyan news RSS feeds and Reddit r/Kenya, classifies sentiment, and POSTs events to the backend. The existing 5-minute alert evaluation loop picks them up automatically.
+
 ### Full Docker stack (production-like)
 ```bash
-docker-compose up -d     # builds and starts all three services
+docker-compose up -d     # builds and starts all four services (postgres, backend, frontend, scraper)
 docker-compose down      # tear down
 docker-compose logs -f   # stream logs
 ```
@@ -154,6 +180,15 @@ All seed accounts use password **`Nyayo2024!`** and log in **without** email OTP
 - County code lookup (e.g. `047` for Nairobi) instead of raw database IDs
 - View and create alert thresholds (metric type, severity, county, topic)
 - User table shows "Invite pending" badge until the user activates their account
+
+### Automated Sentiment Ingestion (Scraper)
+- Python scraper service pulls from Kenyan RSS feeds (Nation Africa, Standard Media, Citizen TV, KBC) and Reddit r/Kenya every 60 minutes
+- Sentiment classified by `cardiffnlp/twitter-roberta-base-sentiment-latest` — outputs POSITIVE / NEUTRAL / NEGATIVE with a score in [-1, 1]
+- County detected via keyword matching against all 47 county names + aliases (e.g. "Eldoret" → Uasin Gishu)
+- Topic detected via keyword matching against all 12 topics — one article can produce multiple events
+- URL deduplication via SQLite — articles are never processed twice
+- Events ingested via `POST /api/ingest/events` (API key auth, rate-limited)
+- Alert thresholds evaluate automatically every 5 minutes — no extra configuration needed
 
 ---
 
@@ -247,6 +282,7 @@ nyayo-sentinel-dashboard/
 │   │   │   ├── users.ts      # invite-based user creation (county code lookup)
 │   │   │   ├── profile.ts    # GET/PATCH profile, POST change-password
 │   │   │   ├── alerts.ts     # alerts + threshold management + email on fire
+│   │   │   ├── ingest.ts     # POST /api/ingest/events — scraper batch ingest
 │   │   │   ├── dashboard.ts
 │   │   │   ├── counties.ts
 │   │   │   ├── topics.ts
@@ -255,6 +291,7 @@ nyayo-sentinel-dashboard/
 │   │   │   └── email.ts      # Nodemailer Gmail — all email send functions
 │   │   ├── middleware/
 │   │   │   ├── auth.ts       # JWT verification + RBAC
+│   │   │   ├── apiKey.ts     # API key auth for scraper ingest endpoint
 │   │   │   └── audit.ts      # Append-only audit logging
 │   │   ├── config/env.ts
 │   │   └── lib/prisma.ts
@@ -263,6 +300,24 @@ nyayo-sentinel-dashboard/
 │   │   ├── seed.ts
 │   │   └── migrations/
 │   └── Dockerfile
+├── scraper/
+│   ├── main.py               # Scheduler — runs every 60 min
+│   ├── config.py             # Env vars + county/topic name constants
+│   ├── dedup.py              # SQLite URL deduplication
+│   ├── ingest_client.py      # HTTP client → POST /api/ingest/events
+│   ├── nlp/
+│   │   ├── sentiment.py      # HuggingFace sentiment model (lazy singleton)
+│   │   ├── county_detector.py # Regex keyword matching → county name
+│   │   └── topic_detector.py  # Keyword matching → topic name list
+│   ├── scrapers/
+│   │   ├── base.py           # Article dataclass + BaseScraper ABC
+│   │   ├── rss_feeds.py      # Nation Africa, Standard Media, Citizen TV, KBC
+│   │   └── reddit_kenya.py   # r/Kenya via public JSON API
+│   ├── train/
+│   │   └── finetune.py       # Phase 2: fine-tune custom Kenyan sentiment model
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── .env.example
 ├── docker-compose.yml
 └── README.md
 ```
@@ -295,3 +350,5 @@ Indexes: `SentimentEvent(timestamp)`, `SentimentEvent(countyId)`, `SentimentEven
 - Invite tokens and password reset tokens expire after 24 hours and 1 hour respectively
 - `SentimentEvent` must never store names, phone numbers, national IDs, or any free-text PII
 - `COUNTY_OFFICIAL` data is always county-scoped at the API layer — never rely on client-supplied county filters
+- `SCRAPER_API_KEY` must be at least 32 characters; the ingest endpoint uses `crypto.timingSafeEqual` to prevent timing attacks
+- The ingest endpoint is rate-limited separately (10 req/min) from the login limiter
