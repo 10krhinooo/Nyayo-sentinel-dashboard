@@ -9,6 +9,30 @@ export const api = axios.create({
   withCredentials: true
 });
 
+// Lazy CSRF token — fetched once on the first mutating request, cleared on logout
+let csrfToken: string | null = null;
+export function clearCsrfToken() { csrfToken = null; }
+async function getCsrfToken(): Promise<string> {
+  if (!csrfToken) {
+    const res = await axios.get<{ token: string }>(
+      `${apiBaseUrl}/api/csrf-token`,
+      { withCredentials: true }
+    );
+    csrfToken = res.data.token;
+  }
+  return csrfToken;
+}
+
+// Attach CSRF token to all state-changing requests
+api.interceptors.request.use(async (config) => {
+  const method = (config.method ?? "get").toLowerCase();
+  if (["post", "put", "patch", "delete"].includes(method)) {
+    const token = await getCsrfToken();
+    config.headers["x-csrf-token"] = token;
+  }
+  return config;
+});
+
 let isRefreshing = false;
 let refreshQueue: Array<(ok: boolean) => void> = [];
 
@@ -39,6 +63,7 @@ api.interceptors.response.use(
     } catch {
       refreshQueue.forEach((cb) => cb(false));
       refreshQueue = [];
+      csrfToken = null;
       clearUser();
       if (typeof window !== "undefined") {
         window.location.href = "/";
