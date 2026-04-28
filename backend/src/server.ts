@@ -79,15 +79,23 @@ const loginLimiter = rateLimit({
   message: { message: "Too many login attempts. Please try again later." }
 });
 
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many requests. Please try again later." }
+});
+
 app.use("/api/auth/login", loginLimiter);
 app.use("/api/auth", authRoutes);
-app.use("/api/dashboard", dashboardRoutes);
-app.use("/api/counties", countiesRoutes);
-app.use("/api/topics", topicsRoutes);
-app.use("/api/alerts", alertsRoutes);
-app.use("/api/reports", reportsRoutes);
-app.use("/api/users", usersRoutes);
-app.use("/api/profile", profileRoutes);
+app.use("/api/dashboard", apiLimiter, dashboardRoutes);
+app.use("/api/counties", apiLimiter, countiesRoutes);
+app.use("/api/topics", apiLimiter, topicsRoutes);
+app.use("/api/alerts", apiLimiter, alertsRoutes);
+app.use("/api/reports", apiLimiter, reportsRoutes);
+app.use("/api/users", apiLimiter, usersRoutes);
+app.use("/api/profile", apiLimiter, profileRoutes);
 app.use("/api/ingest", ingestRoutes);
 
 const server = http.createServer(app);
