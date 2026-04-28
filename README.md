@@ -1,7 +1,7 @@
 Nyayo Sentinel Dashboard – Early Warning System
 ================================================
 
-A secure, production-ready government analytics platform for monitoring public sentiment across all 47 Kenyan counties. Designed as an **early warning system** for detecting emerging frustration, unrest, or spikes in negative sentiment, with county- and topic-level drill-downs, configurable alerting, and full audit logging.
+A secure, production-ready government analytics platform for monitoring public sentiment across all 47 Kenyan counties. Designed as an **early warning system** for detecting emerging frustration, unrest, or spikes in negative sentiment, with county- and topic-level drill-downs, real-time alerting, email notifications, and full audit logging.
 
 ---
 
@@ -10,14 +10,16 @@ A secure, production-ready government analytics platform for monitoring public s
 ```
 Browser → Next.js Frontend (3000) → Express Backend (4000) → PostgreSQL (5432)
                                            ↕ Socket.io (real-time alerts)
+                                           ↕ Gmail SMTP (email notifications)
 ```
 
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, Recharts, React Simple Maps |
-| Backend | Node.js 20, Express 4, TypeScript, Prisma 5, Socket.io 4 |
+| Backend | Node.js 20, Express 4, TypeScript, Prisma 5, Socket.io 4, Nodemailer |
 | Database | PostgreSQL 16 |
-| Auth | JWT (access 15 min / refresh 7 days in httpOnly cookies), TOTP MFA via otplib |
+| Auth | JWT (access 15 min / refresh 7 days, httpOnly cookies), Email OTP 2FA |
+| Email | Gmail SMTP via Nodemailer (invite, 2FA OTP, alerts, password reset) |
 | Deployment | Docker + Docker Compose |
 
 ---
@@ -41,7 +43,12 @@ JWT_ACCESS_TOKEN_TTL=900
 JWT_REFRESH_TOKEN_TTL=604800
 ALLOWED_ORIGINS=http://localhost:3000
 MFA_ISSUER=NyayoSentinel
+SMTP_USER=your-gmail@gmail.com
+SMTP_PASS=your-gmail-app-password
+FRONTEND_URL=http://localhost:3000
 ```
+
+> **Gmail App Password**: In your Google account go to Security → 2-Step Verification → App passwords. Use the 16-character password generated there as `SMTP_PASS`. Do **not** use your normal Gmail password.
 
 Create `frontend/.env.local`:
 ```env
@@ -83,12 +90,13 @@ docker-compose logs -f   # stream logs
 
 ## Seed Credentials
 
-All test accounts use password **`Nyayo2024!`**
+All seed accounts use password **`Nyayo2024!`** and log in **without** email OTP (2FA is only enforced on new accounts created via the invite flow).
 
 | Email | Role | Scope |
 |-------|------|-------|
 | `admin@sentinel.ke` | National Admin | All 47 counties |
 | `analyst@sentinel.ke` | Analyst | All counties (read-only) |
+| `analyst2@sentinel.ke` | Analyst | All counties (read-only) |
 | `nairobi.official@county.ke` | County Official | Nairobi only |
 | `mombasa.official@county.ke` | County Official | Mombasa only |
 | `kisumu.official@county.ke` | County Official | Kisumu only |
@@ -99,13 +107,20 @@ All test accounts use password **`Nyayo2024!`**
 ## Features
 
 ### Authentication & Access Control
-- Login page with email/password and optional TOTP MFA
+- **Email OTP 2FA** — new accounts (created via invite) require a 6-digit code sent to their email on every login; seed accounts bypass OTP
+- **User invite flow** — admin creates a user (no password required); a 24-hour invite link is emailed; user sets their own password on first access
+- **Forgot / reset password** — self-service reset via emailed token link (1-hour expiry)
 - Role-based navigation — sidebar links are scoped per role:
-  - **National Admin**: Dashboard, Heatmap, Topics, Alerts, Reports, Admin
-  - **Analyst**: Dashboard, Heatmap, Topics, Alerts, Reports
-  - **County Official**: Dashboard, Heatmap, Topics, Alerts (county-scoped data only)
+  - **National Admin**: Dashboard, Heatmap, Topics, Alerts, Reports, Admin, Profile
+  - **Analyst**: Dashboard, Heatmap, Topics, Alerts, Reports, Profile
+  - **County Official**: Dashboard, Heatmap, Topics, Alerts (county-scoped), Profile
 - HTTP-only cookie tokens with transparent refresh on 401
 - Audit log on every sensitive action (2xx only, KDPA-compliant)
+
+### Profile
+- View name, email, role, county, last login, and 2FA status
+- Edit first and last name
+- Change password (requires current password, sends confirmation email)
 
 ### Sentiment Overview Dashboard
 - National sentiment distribution (positive / neutral / negative %)
@@ -115,6 +130,7 @@ All test accounts use password **`Nyayo2024!`**
 
 ### County Heatmap
 - Interactive Kenya map — counties shaded by negative sentiment intensity
+- Drill down to sub-county and constituency level
 - Hover tooltip: score, negative share, event volume
 - Sortable county data table
 
@@ -124,6 +140,7 @@ All test accounts use password **`Nyayo2024!`**
 
 ### Early Warning Alerts
 - Real-time alerts pushed over Socket.io (scoped to user's county)
+- **Email notification** — county officials and national admins are emailed whenever a new alert fires
 - Acknowledge and Resolve buttons with optimistic UI updates
 - Pagination (20 per page)
 - Two trigger types: `THRESHOLD` (negative %) and `SPIKE` (volume factor)
@@ -133,8 +150,58 @@ All test accounts use password **`Nyayo2024!`**
 - Downloads sent via axios blob (auth cookies included)
 
 ### Admin Panel *(National Admin only)*
-- View and create alert thresholds
-- Configure metric type (NEGATIVE_PERCENT 0–100 or SPIKE_FACTOR >1), severity, county, topic
+- Create users via invite email — no password set by admin
+- County code lookup (e.g. `047` for Nairobi) instead of raw database IDs
+- View and create alert thresholds (metric type, severity, county, topic)
+- User table shows "Invite pending" badge until the user activates their account
+
+---
+
+## Email Notifications
+
+The system sends email in the following situations:
+
+| Trigger | Recipient | Template |
+|---------|-----------|----------|
+| Admin creates a new user | New user | Invite link (24 hr expiry) |
+| Login for a 2FA-enabled account | Logging-in user | 6-digit OTP (10 min expiry) |
+| Alert threshold triggered | County official + all national admins | Alert detail with severity and summary |
+| User changes their password | Account owner | Password changed confirmation |
+| User requests password reset | Account owner | Reset link (1 hr expiry) |
+| User sets password via invite | Account owner | Welcome / account activated |
+
+---
+
+## County Codes
+
+County Officials must be assigned using the 3-digit county code (e.g. `047` for Nairobi). Full list:
+
+| Code | County | Code | County |
+|------|--------|------|--------|
+| 001 | Mombasa | 025 | Samburu |
+| 002 | Kwale | 026 | Trans-Nzoia |
+| 003 | Kilifi | 027 | Uasin Gishu |
+| 004 | Tana River | 028 | Elgeyo-Marakwet |
+| 005 | Lamu | 029 | Nandi |
+| 006 | Taita-Taveta | 030 | Baringo |
+| 007 | Garissa | 031 | Laikipia |
+| 008 | Wajir | 032 | Nakuru |
+| 009 | Mandera | 033 | Narok |
+| 010 | Marsabit | 034 | Kajiado |
+| 011 | Isiolo | 035 | Kericho |
+| 012 | Meru | 036 | Bomet |
+| 013 | Tharaka-Nithi | 037 | Kakamega |
+| 014 | Embu | 038 | Vihiga |
+| 015 | Kitui | 039 | Bungoma |
+| 016 | Machakos | 040 | Busia |
+| 017 | Makueni | 041 | Siaya |
+| 018 | Nyandarua | 042 | Kisumu |
+| 019 | Nyeri | 043 | Homa Bay |
+| 020 | Kirinyaga | 044 | Migori |
+| 021 | Murang'a | 045 | Kisii |
+| 022 | Kiambu | 046 | Nyamira |
+| 023 | Turkana | 047 | Nairobi |
+| 024 | West Pokot | | |
 
 ---
 
@@ -145,32 +212,55 @@ nyayo-sentinel-dashboard/
 ├── frontend/
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── (auth)/login/   # Login page (no sidebar)
-│   │   │   ├── (dashboard)/    # All protected pages + layout
+│   │   │   ├── (auth)/
+│   │   │   │   ├── login/page.tsx          # Email + password → OTP step
+│   │   │   │   ├── set-password/page.tsx   # Invite token → set password
+│   │   │   │   ├── forgot-password/page.tsx
+│   │   │   │   └── reset-password/page.tsx
+│   │   │   ├── (dashboard)/
+│   │   │   │   ├── layout.tsx              # AuthGuard + Sidebar + Topbar
+│   │   │   │   ├── page.tsx                # National overview
+│   │   │   │   ├── heatmap/page.tsx        # County / sub-county heatmap
+│   │   │   │   ├── topics/page.tsx
+│   │   │   │   ├── alerts/page.tsx
+│   │   │   │   ├── reports/page.tsx
+│   │   │   │   ├── admin/page.tsx          # User management + thresholds
+│   │   │   │   └── profile/page.tsx        # Name, password, 2FA status
 │   │   │   ├── globals.css
-│   │   │   └── layout.tsx      # Root layout (html/body + Inter font)
+│   │   │   └── layout.tsx
 │   │   ├── components/
-│   │   │   ├── AuthGuard.tsx   # Redirects unauthenticated users to /login
-│   │   │   ├── Sidebar.tsx     # Role-aware nav + logout
-│   │   │   ├── Topbar.tsx      # Page title + open alert count
-│   │   │   └── KenyaHeatmap.tsx
+│   │   │   ├── AuthGuard.tsx
+│   │   │   ├── Sidebar.tsx                 # Role-aware nav + profile link
+│   │   │   ├── Topbar.tsx
+│   │   │   ├── KenyaHeatmap.tsx
+│   │   │   └── SubCountyHeatmap.tsx
 │   │   └── lib/
-│   │       ├── api.ts          # Axios instance + 401 refresh interceptor
-│   │       ├── auth.ts         # localStorage user store (getUser/setUser/clearUser)
-│   │       └── socket.ts       # Socket.io client (cookie auth)
+│   │       ├── api.ts                      # Axios + 401 refresh interceptor
+│   │       ├── auth.ts                     # localStorage user store
+│   │       └── socket.ts
 │   └── Dockerfile
 ├── backend/
 │   ├── src/
-│   │   ├── server.ts           # Express + Socket.io + alert evaluation loop
-│   │   ├── routes/             # auth, dashboard, counties, topics, alerts, reports
+│   │   ├── server.ts
+│   │   ├── routes/
+│   │   │   ├── auth.ts       # login, verify-otp, set-password, forgot/reset-password
+│   │   │   ├── users.ts      # invite-based user creation (county code lookup)
+│   │   │   ├── profile.ts    # GET/PATCH profile, POST change-password
+│   │   │   ├── alerts.ts     # alerts + threshold management + email on fire
+│   │   │   ├── dashboard.ts
+│   │   │   ├── counties.ts
+│   │   │   ├── topics.ts
+│   │   │   └── reports.ts
+│   │   ├── services/
+│   │   │   └── email.ts      # Nodemailer Gmail — all email send functions
 │   │   ├── middleware/
-│   │   │   ├── auth.ts         # JWT verification + RBAC
-│   │   │   └── audit.ts        # Append-only audit logging (2xx only)
-│   │   ├── config/env.ts       # Zod-validated environment config
-│   │   └── lib/prisma.ts       # Prisma singleton
+│   │   │   ├── auth.ts       # JWT verification + RBAC
+│   │   │   └── audit.ts      # Append-only audit logging
+│   │   ├── config/env.ts
+│   │   └── lib/prisma.ts
 │   ├── prisma/
-│   │   ├── schema.prisma       # Data model + performance indexes
-│   │   ├── seed.ts             # 47 counties, 12 topics, 7 users, 30-day events
+│   │   ├── schema.prisma
+│   │   ├── seed.ts
 │   │   └── migrations/
 │   └── Dockerfile
 ├── docker-compose.yml
@@ -183,15 +273,15 @@ nyayo-sentinel-dashboard/
 
 | Model | Key fields |
 |-------|-----------|
-| `User` | email, passwordHash, role (NATIONAL_ADMIN / COUNTY_OFFICIAL / ANALYST), countyId? |
+| `User` | email, passwordHash, firstName?, lastName?, role, countyId?, mfaEnabled, otpCode?, inviteToken?, mustSetPassword, resetToken? |
 | `County` | name, code (001–047), region |
 | `Topic` | name, category, isActive |
-| `SentimentEvent` | countyId, topicId, timestamp, sentimentScore (-1→1), sentimentLabel, source — **no PII** |
+| `SentimentEvent` | countyId, topicId, constituencyId?, subCountyId?, timestamp, sentimentScore, sentimentLabel, source — **no PII** |
 | `AlertThreshold` | metricType, thresholdVal, severity, countyId?, topicId? |
 | `Alert` | countyId, topicId?, severity, triggerType, status (OPEN/ACKNOWLEDGED/RESOLVED) |
 | `AuditLog` | userId?, action, resourceType, metadata (JSON) |
 
-Indexes: `SentimentEvent(timestamp)`, `SentimentEvent(countyId)`, `SentimentEvent(topicId)`, `Alert(status)`, `Alert(countyId)`.
+Indexes: `SentimentEvent(timestamp)`, `SentimentEvent(countyId)`, `SentimentEvent(topicId)`, `SentimentEvent(constituencyId)`, `SentimentEvent(subCountyId)`, `Alert(status)`, `Alert(countyId)`.
 
 ---
 
@@ -199,7 +289,9 @@ Indexes: `SentimentEvent(timestamp)`, `SentimentEvent(countyId)`, `SentimentEven
 
 - All JWT secrets in `.env` must be rotated before production deployment
 - The default Docker Compose password (`nyayo_secure_password`) is for local dev only
-- Socket.io connections require a valid access token cookie — unauthenticated connections are rejected
+- Socket.io connections require a valid access token — unauthenticated connections are rejected
 - Login endpoint is rate-limited to 15 requests per 15 minutes
-- MFA setup (`POST /auth/mfa/setup`) requires authentication and can only be called for the requesting user's own account
+- Email OTP codes are bcrypt-hashed before storage and expire after 10 minutes
+- Invite tokens and password reset tokens expire after 24 hours and 1 hour respectively
 - `SentimentEvent` must never store names, phone numbers, national IDs, or any free-text PII
+- `COUNTY_OFFICIAL` data is always county-scoped at the API layer — never rely on client-supplied county filters
