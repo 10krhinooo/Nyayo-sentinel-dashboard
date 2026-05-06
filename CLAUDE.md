@@ -55,6 +55,7 @@ SMTP_PASS=<gmail-app-password>
 FRONTEND_URL=http://localhost:3000
 SCRAPER_API_KEY=<min-32-char-random-string>
 INGEST_RATE_LIMIT_RPM=10
+ANTHROPIC_API_KEY=<sk-ant-...>   # optional — enables AI-generated alert summaries
 ```
 
 **`scraper/.env`** (not committed — copy from `scraper/.env.example`):
@@ -128,13 +129,14 @@ app/
 - **`routes/auth.ts`** — Login (password verify → email OTP for mfaEnabled users, direct login for mfaEnabled=false), `POST /verify-otp`, `POST /set-password` (invite), `POST /forgot-password`, `POST /reset-password`, token refresh, logout.
 - **`routes/users.ts`** — Admin-only. `POST /users` generates invite token + sends invite email (no password set by admin). Accepts `countyCode` (e.g. `"047"`) and resolves to countyId. `PATCH` and `DELETE` unchanged.
 - **`routes/profile.ts`** — `GET /profile`, `PATCH /profile` (firstName/lastName), `POST /profile/change-password`. All require `authenticate()`.
-- **`routes/alerts.ts`** — GET with pagination, POST threshold, PATCH status, `evaluateAlertThresholds()` (emails county officials + national admins on new alert).
-- **`routes/ingest.ts`** — `POST /api/ingest/events`: batch ingest endpoint for the scraper. Uses `requireApiKey` (not JWT). Accepts up to 500 events per request, resolves county/topic names to IDs, bulk-inserts `SentimentEvent` rows. Rate-limited at 10 req/min separately from the login limiter.
-- **`services/email.ts`** — Nodemailer Gmail SMTP transporter. Functions: `sendInviteEmail`, `sendOtpEmail`, `sendAlertEmail`, `sendPasswordChangedEmail`, `sendPasswordResetEmail`, `sendWelcomeEmail`. Logs a warning and skips silently if SMTP_USER/SMTP_PASS are not set.
+- **`routes/alerts.ts`** — GET with pagination, POST threshold, PATCH status, `evaluateAlertThresholds()` (emails county officials + national admins on new alert). `notifyAlertRecipients()` fetches recent article headlines from DB, calls `generateAlertSummary()`, persists the result as `alert.llmSummary`, and passes it to the email. `GET /:id/details` includes `llmSummary` in its response.
+- **`routes/ingest.ts`** — `POST /api/ingest/events`: batch ingest endpoint for the scraper. Uses `requireApiKey` (not JWT). Accepts up to 500 events per request, resolves county/topic names to IDs, bulk-inserts `SentimentEvent` rows. Accepts optional `headline` (max 220 chars) and `snippet` (max 500 chars) per event for LLM context. Rate-limited at 10 req/min separately from the login limiter.
+- **`services/email.ts`** — Nodemailer Gmail SMTP transporter. Functions: `sendInviteEmail`, `sendOtpEmail`, `sendAlertEmail`, `sendPasswordChangedEmail`, `sendPasswordResetEmail`, `sendWelcomeEmail`. `sendAlertEmail` accepts an optional `llmSummary` string and renders an "AI Analysis" block in the email when present. Logs a warning and skips silently if SMTP_USER/SMTP_PASS are not set.
+- **`services/llm.ts`** — Lazy Anthropic client. `generateAlertSummary()` calls Claude Haiku with the county, topic, trigger type, stats, and up to 15 recent article headlines to produce a 2–3 sentence plain-English summary. Returns `null` if `ANTHROPIC_API_KEY` is not set or no headlines are available — callers degrade gracefully.
 - **`middleware/auth.ts`** — `authenticate(optional?)`: reads JWT from `Authorization: Bearer` header or `nyayo_access_token` cookie. `requireRoles(roles[])`: RBAC check.
 - **`middleware/apiKey.ts`** — `requireApiKey`: reads `X-API-Key` header, compares to `env.SCRAPER_API_KEY` using `crypto.timingSafeEqual`. Returns 503 if key not configured, 401 if wrong.
 - **`middleware/audit.ts`** — Logs to `AuditLog` only on 2xx responses. Captures `resourceId` from `req.params.id`.
-- **`config/env.ts`** — Zod-parsed env. Always import `env` from here — never use `process.env` directly in routes. Exports `SMTP_USER`, `SMTP_PASS`, `FRONTEND_URL`, `SCRAPER_API_KEY`, `INGEST_RATE_LIMIT_RPM`.
+- **`config/env.ts`** — Zod-parsed env. Always import `env` from here — never use `process.env` directly in routes. Exports `SMTP_USER`, `SMTP_PASS`, `FRONTEND_URL`, `SCRAPER_API_KEY`, `INGEST_RATE_LIMIT_RPM`, `ANTHROPIC_API_KEY`.
 
 ### Auth flow (2FA)
 - `POST /auth/login`: verify password → if `mustSetPassword`, return `requiresPasswordSetup: true` → if `mfaEnabled: false` (seed users), issue tokens directly → if `mfaEnabled: true` (new users), generate bcrypt-hashed OTP, store with 10-min expiry, email user, return `requiresOtp: true`.
@@ -151,13 +153,14 @@ app/
 `evaluateAlertThresholds()` in `routes/alerts.ts`:
 1. Fetches all active thresholds.
 2. Fetches distinct county IDs from the last 24 hours **once** (not per threshold).
-3. For each threshold × county: runs aggregate COUNT queries, checks against threshold, deduplicates on `OPEN|ACKNOWLEDGED` status, creates `Alert`, emits `alert:new` via Socket.io, emails county officials + national admins.
+3. For each threshold × county: runs aggregate COUNT queries, checks against threshold, deduplicates on `OPEN|ACKNOWLEDGED` status, creates `Alert`, emits `alert:new` via Socket.io, calls `notifyAlertRecipients()` async.
+4. `notifyAlertRecipients()`: fetches recent `SentimentEvent` headlines for the alert's county+topic window, calls `generateAlertSummary()` (Claude Haiku), persists result as `alert.llmSummary`, then emails county officials + national admins with the LLM summary included.
 
 Socket emit is county-scoped: sockets where `socket.data.user.countyId === alert.countyId` or `countyId === null` (national admins/analysts) receive it.
 
 ### Scraper service (`scraper/`)
 
-- **`main.py`** — Scheduler loop. Calls each scraper, runs NLP pipeline per article, builds event dicts, calls `post_events()`. Runs immediately on start, then every `SCRAPE_INTERVAL_MINUTES`.
+- **`main.py`** — Scheduler loop. Calls each scraper, runs NLP pipeline per article, builds event dicts (including `headline` and `snippet` for LLM context), calls `post_events()`. Runs immediately on start, then every `SCRAPE_INTERVAL_MINUTES`.
 - **`config.py`** — Reads `.env`, defines `COUNTY_NAMES` (47) and `TOPIC_NAMES` (12) as Python lists. These must stay in sync with `prisma/seed.ts`.
 - **`dedup.py`** — SQLite-backed URL deduplication. `is_seen(url)` / `mark_seen(url)` / `purge_old(days=30)`. DB path from `DEDUP_DB_PATH` env var.
 - **`ingest_client.py`** — POSTs event batches to `INGEST_URL` with `X-API-Key` header. Chunks at 500 events. Logs full response body on error.
@@ -166,12 +169,15 @@ Socket emit is county-scoped: sockets where `socket.data.user.countyId === alert
 - **`nlp/topic_detector.py`** — Keyword matching for 12 topics. Returns a list — one article can match multiple topics, producing one `SentimentEvent` per `(county, topic)` pair.
 - **`scrapers/rss_feeds.py`** — feedparser + requests/BeautifulSoup for Nation Africa, Standard Media, Citizen TV, KBC RSS feeds.
 - **`scrapers/reddit_kenya.py`** — Reddit public JSON API (`/r/Kenya/new.json`). No credentials required.
+- **`scrapers/facebook_pages.py`** — Scrapes 7 major Kenyan Facebook pages (Nation, Standard, Citizen, KBC, Tuko, The Star, Kenya Red Cross) via the `facebook-scraper` library. Accepts optional `FACEBOOK_COOKIES` (Netscape-format file) to reduce interstitials; falls back to RSS/homepage scraping when cookies are absent or the library fails.
+- **`scrapers/instagram_pages.py`** — Fetches posts from `nairobi_gossip_club` via `instaloader`. Login is optional: if `INSTAGRAM_USERNAME`/`INSTAGRAM_PASSWORD` are set it attempts authenticated access; if credentials are missing or Instagram returns a checkpoint/login error it falls back to unauthenticated fetching of the public profile. Controlled by `INSTAGRAM_ENABLED` flag.
 - **`train/finetune.py`** — Phase 2 script. Run manually after collecting ~1,500 human-labeled articles. Fine-tunes `Davlan/afro-xlmr-large` (English + Swahili).
 
 Timestamps sent to the backend must use `strftime("%Y-%m-%dT%H:%M:%SZ")` format — Zod's `.datetime()` requires `Z` suffix, not `+00:00`.
 
 ### Data model invariants
-- `SentimentEvent` must never store PII (no names, IDs, phone numbers, free text).
+- `SentimentEvent` must never store PII (no names, IDs, phone numbers). The `headline` and `snippet` fields store public article content sourced from published news — this is acceptable. Never store user-generated free text that could identify individuals.
+- `Alert.llmSummary` is populated asynchronously after alert creation by `notifyAlertRecipients()`; it may be `null` for alerts fired before the LLM feature was deployed or when `ANTHROPIC_API_KEY` is not set.
 - `COUNTY_OFFICIAL` users are always scoped at the API layer via `req.user.countyId` — enforce this in every new route that touches county data.
 - Audit logs are append-only by convention — never delete or update `AuditLog` rows.
 - OTP codes are bcrypt-hashed before storage — never store plaintext codes.
