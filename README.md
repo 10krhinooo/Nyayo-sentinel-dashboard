@@ -8,11 +8,12 @@ A secure, production-ready government analytics platform for monitoring public s
 ## Architecture
 
 ```
-Kenyan News / Reddit → Python Scraper (NLP) → POST /api/ingest/events
-                                                        ↓
+Kenyan News / Reddit / Facebook / Instagram → Python Scraper (NLP) → POST /api/ingest/events
+                                                                               ↓
 Browser → Next.js Frontend (3000) → Express Backend (4000) → PostgreSQL (5432)
                                            ↕ Socket.io (real-time alerts)
                                            ↕ Gmail SMTP (email notifications)
+                                           ↕ Anthropic Claude API (AI alert summaries)
 ```
 
 | Layer | Technology |
@@ -22,7 +23,8 @@ Browser → Next.js Frontend (3000) → Express Backend (4000) → PostgreSQL (5
 | Database | PostgreSQL 16 |
 | Auth | JWT (access 15 min / refresh 7 days, httpOnly cookies), Email OTP 2FA |
 | Email | Gmail SMTP via Nodemailer (invite, 2FA OTP, alerts, password reset) |
-| Scraper | Python 3.12, HuggingFace Transformers, feedparser, requests |
+| Scraper | Python 3.12, HuggingFace Transformers, feedparser, requests, instaloader, facebook-scraper |
+| AI Summaries | Anthropic Claude Haiku — plain-English alert summaries generated at alert-fire time |
 | Deployment | Docker + Docker Compose |
 
 ---
@@ -51,6 +53,7 @@ SMTP_PASS=your-gmail-app-password
 FRONTEND_URL=http://localhost:3000
 SCRAPER_API_KEY=<random-string-min-32-chars>
 INGEST_RATE_LIMIT_RPM=10
+ANTHROPIC_API_KEY=<sk-ant-...>   # optional — enables AI-generated alert summaries
 ```
 
 > **Gmail App Password**: In your Google account go to Security → 2-Step Verification → App passwords. Use the 16-character password generated there as `SMTP_PASS`. Do **not** use your normal Gmail password.
@@ -103,7 +106,11 @@ pip install -r requirements.txt
 python main.py
 ```
 
-The scraper runs immediately on start, then every 60 minutes. It fetches articles from Kenyan news RSS feeds and Reddit r/Kenya, classifies sentiment, and POSTs events to the backend. The existing 5-minute alert evaluation loop picks them up automatically.
+The scraper runs immediately on start, then every 60 minutes. It fetches articles from Kenyan news RSS feeds, Reddit r/Kenya, Facebook pages, and Instagram. Each event is POSTed to the backend with the article `headline` and `snippet` attached so the backend can generate AI summaries when alerts fire. The 5-minute alert evaluation loop picks them up automatically.
+
+**Social media scrapers** are enabled by default but optional:
+- **Facebook** (`FACEBOOK_ENABLED=true`) — scrapes 7 major Kenyan pages; works without cookies but providing a `FACEBOOK_COOKIES` file reduces rate-limiting.
+- **Instagram** (`INSTAGRAM_ENABLED=true`) — fetches `nairobi_gossip_club`; falls back to unauthenticated access if credentials are missing or Instagram blocks the login.
 
 ### Full Docker stack (production-like)
 ```bash
@@ -166,7 +173,8 @@ All seed accounts use password **`Nyayo2024!`** and log in **without** email OTP
 
 ### Early Warning Alerts
 - Real-time alerts pushed over Socket.io (scoped to user's county)
-- **Email notification** — county officials and national admins are emailed whenever a new alert fires
+- **Email notification** — county officials and national admins are emailed whenever a new alert fires; includes an "AI Analysis" block when `ANTHROPIC_API_KEY` is configured
+- **AI-generated summaries** — Claude Haiku reads recent article headlines for the triggered county/topic and writes a 2–3 sentence plain-English explanation; stored on the `Alert` record and shown in the detail drawer
 - Acknowledge and Resolve buttons with optimistic UI updates
 - Pagination (20 per page)
 - Two trigger types: `THRESHOLD` (negative %) and `SPIKE` (volume factor)
@@ -182,10 +190,11 @@ All seed accounts use password **`Nyayo2024!`** and log in **without** email OTP
 - User table shows "Invite pending" badge until the user activates their account
 
 ### Automated Sentiment Ingestion (Scraper)
-- Python scraper service pulls from Kenyan RSS feeds (Nation Africa, Standard Media, Citizen TV, KBC) and Reddit r/Kenya every 60 minutes
+- Python scraper service pulls from Kenyan RSS feeds (Nation Africa, Standard Media, Citizen TV, KBC), Reddit r/Kenya, 7 Kenyan Facebook pages, and Instagram (`nairobi_gossip_club`) every 60 minutes
 - Sentiment classified by `cardiffnlp/twitter-roberta-base-sentiment-latest` — outputs POSITIVE / NEUTRAL / NEGATIVE with a score in [-1, 1]
 - County detected via keyword matching against all 47 county names + aliases (e.g. "Eldoret" → Uasin Gishu)
 - Topic detected via keyword matching against all 12 topics — one article can produce multiple events
+- Each event carries the article `headline` (max 220 chars) and `snippet` (max 500 chars) for downstream LLM summarisation
 - URL deduplication via SQLite — articles are never processed twice
 - Events ingested via `POST /api/ingest/events` (API key auth, rate-limited)
 - Alert thresholds evaluate automatically every 5 minutes — no extra configuration needed
@@ -288,7 +297,8 @@ nyayo-sentinel-dashboard/
 │   │   │   ├── topics.ts
 │   │   │   └── reports.ts
 │   │   ├── services/
-│   │   │   └── email.ts      # Nodemailer Gmail — all email send functions
+│   │   │   ├── email.ts      # Nodemailer Gmail — all email send functions
+│   │   │   └── llm.ts        # Anthropic Claude Haiku — generateAlertSummary()
 │   │   ├── middleware/
 │   │   │   ├── auth.ts       # JWT verification + RBAC
 │   │   │   ├── apiKey.ts     # API key auth for scraper ingest endpoint
@@ -312,7 +322,9 @@ nyayo-sentinel-dashboard/
 │   ├── scrapers/
 │   │   ├── base.py           # Article dataclass + BaseScraper ABC
 │   │   ├── rss_feeds.py      # Nation Africa, Standard Media, Citizen TV, KBC
-│   │   └── reddit_kenya.py   # r/Kenya via public JSON API
+│   │   ├── reddit_kenya.py   # r/Kenya via public JSON API
+│   │   ├── facebook_pages.py # 7 Kenyan Facebook pages via facebook-scraper
+│   │   └── instagram_pages.py # nairobi_gossip_club via instaloader (auth optional)
 │   ├── train/
 │   │   └── finetune.py       # Phase 2: fine-tune custom Kenyan sentiment model
 │   ├── Dockerfile
@@ -331,9 +343,9 @@ nyayo-sentinel-dashboard/
 | `User` | email, passwordHash, firstName?, lastName?, role, countyId?, mfaEnabled, otpCode?, inviteToken?, mustSetPassword, resetToken? |
 | `County` | name, code (001–047), region |
 | `Topic` | name, category, isActive |
-| `SentimentEvent` | countyId, topicId, constituencyId?, subCountyId?, timestamp, sentimentScore, sentimentLabel, source — **no PII** |
+| `SentimentEvent` | countyId, topicId, constituencyId?, subCountyId?, timestamp, sentimentScore, sentimentLabel, source, headline? (public article title), snippet? (article excerpt) — **no PII** |
 | `AlertThreshold` | metricType, thresholdVal, severity, countyId?, topicId? |
-| `Alert` | countyId, topicId?, severity, triggerType, status (OPEN/ACKNOWLEDGED/RESOLVED) |
+| `Alert` | countyId, topicId?, severity, triggerType, status (OPEN/ACKNOWLEDGED/RESOLVED), llmSummary? (AI-generated plain-English summary) |
 | `AuditLog` | userId?, action, resourceType, metadata (JSON) |
 
 Indexes: `SentimentEvent(timestamp)`, `SentimentEvent(countyId)`, `SentimentEvent(topicId)`, `SentimentEvent(constituencyId)`, `SentimentEvent(subCountyId)`, `Alert(status)`, `Alert(countyId)`.

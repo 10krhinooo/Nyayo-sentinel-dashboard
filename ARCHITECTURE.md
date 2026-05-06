@@ -13,19 +13,21 @@ flowchart LR
         H[Sentiment and Analytics - Aggregation Services]
         I[Alert Engine - Threshold and Spike Detection]
         J[Audit Logger]
+        LLM[LLM Service - Claude Haiku Alert Summaries]
     end
 
     subgraph DB[PostgreSQL Encrypted]
         K[(Users and Roles)]
         L[(Counties and Topics)]
-        M[(Sentiment Events)]
-        N[(Alerts and Thresholds)]
+        M[(Sentiment Events + Headlines)]
+        N[(Alerts + AI Summaries)]
         O[(Audit Logs)]
     end
 
     subgraph Integrations[Secure Integrations]
-        P[Email or SMS Gateway Gov Approved]
-        Q[External Data Pipelines Social Call Center]
+        P[Email Gateway - Gmail SMTP]
+        Q[External Data Pipelines - RSS / Reddit / Facebook / Instagram]
+        R[Anthropic Claude API]
     end
 
     A <--> B
@@ -41,7 +43,10 @@ flowchart LR
     H --> M
     I --> M
     I --> N
+    I --> LLM
+    LLM -->|generateAlertSummary| R
+    LLM --> N
     I --> P
     J --> O
 
-    Q -->|ingest| H
+    Q -->|ingest with headlines| H
