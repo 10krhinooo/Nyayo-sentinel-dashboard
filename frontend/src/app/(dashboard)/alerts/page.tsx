@@ -26,6 +26,31 @@ interface AlertsResponse {
   limit: number;
 }
 
+interface AlertSource {
+  source: string;
+  count: number;
+}
+
+interface TopicContext {
+  description: string;
+  keyAreas: string[];
+}
+
+interface AlertDetails {
+  eventCount: number;
+  negativeCount: number;
+  neutralCount: number;
+  positiveCount: number;
+  negativePercent: number;
+  neutralPercent: number;
+  positivePercent: number;
+  avgScore: number;
+  sources: AlertSource[];
+  topicContext: TopicContext | null;
+  triggerExplanation: string;
+  llmSummary: string | null;
+}
+
 const PAGE_LIMIT = 20;
 
 const TRIGGER_DESCRIPTIONS: Record<Alert["triggerType"], string> = {
@@ -47,6 +72,7 @@ export default function AlertsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Alert | null>(null);
+  const [drawerDetails, setDrawerDetails] = useState<AlertDetails | null | "loading">(null);
   const drawerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -86,6 +112,18 @@ export default function AlertsPage() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
+
+  useEffect(() => {
+    if (!selected) {
+      setDrawerDetails(null);
+      return;
+    }
+    setDrawerDetails("loading");
+    api
+      .get<AlertDetails>(`/alerts/${selected.id}/details`)
+      .then((res) => setDrawerDetails(res.data))
+      .catch(() => setDrawerDetails(null));
+  }, [selected]);
 
   async function updateStatus(id: string, status: Status) {
     setAlerts((prev) =>
@@ -302,9 +340,94 @@ export default function AlertsPage() {
               <div>
                 <p className="drawer-section-title">What triggered this?</p>
                 <div className="drawer-trigger-box">
-                  {TRIGGER_DESCRIPTIONS[selected.triggerType]}
+                  {drawerDetails !== "loading" && drawerDetails?.triggerExplanation
+                    ? drawerDetails.triggerExplanation
+                    : TRIGGER_DESCRIPTIONS[selected.triggerType]}
                 </div>
               </div>
+
+              {/* AI Analysis */}
+              {drawerDetails === "loading" && (
+                <div>
+                  <p className="drawer-section-title">AI Analysis</p>
+                  <div className="skeleton-block" style={{ height: 60, borderRadius: 8 }} />
+                </div>
+              )}
+              {drawerDetails !== "loading" && drawerDetails?.llmSummary && (
+                <div>
+                  <p className="drawer-section-title">AI Analysis</p>
+                  <div className="drawer-trigger-box" style={{ background: "var(--color-info-bg, #eff6ff)", borderLeft: "3px solid #3b82f6", color: "#1e3a5f" }}>
+                    {drawerDetails.llmSummary}
+                  </div>
+                </div>
+              )}
+
+              {/* Topic Context */}
+              {drawerDetails !== "loading" && drawerDetails?.topicContext && (
+                <div>
+                  <p className="drawer-section-title">Topic Context</p>
+                  <div className="drawer-topic-context">
+                    <p style={{ margin: "0 0 0.5rem", fontSize: "0.85rem", lineHeight: 1.55 }}>
+                      {drawerDetails.topicContext.description}
+                    </p>
+                    <p style={{ margin: 0, fontSize: "0.78rem", color: "var(--color-muted)" }}>
+                      Key areas: {drawerDetails.topicContext.keyAreas.join(" · ")}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Alert Statistics — skeleton while loading */}
+              {drawerDetails === "loading" && (
+                <div>
+                  <p className="drawer-section-title">Alert Statistics</p>
+                  <div className="skeleton-block" style={{ height: 72, borderRadius: 8 }} />
+                </div>
+              )}
+
+              {/* Alert Statistics — data */}
+              {drawerDetails !== "loading" && drawerDetails && drawerDetails.eventCount > 0 && (
+                <div>
+                  <p className="drawer-section-title">Alert Statistics (24h window)</p>
+                  <div className="drawer-stats-grid">
+                    {([
+                      { label: "Total Events", value: String(drawerDetails.eventCount), color: undefined },
+                      { label: "Negative",     value: `${drawerDetails.negativePercent}% (${drawerDetails.negativeCount})`, color: "var(--color-danger)" },
+                      { label: "Neutral",      value: `${drawerDetails.neutralPercent}%`,  color: undefined },
+                      { label: "Positive",     value: `${drawerDetails.positivePercent}%`, color: "var(--color-success)" },
+                      { label: "Avg Score",    value: drawerDetails.avgScore.toFixed(2),   color: undefined },
+                    ] as { label: string; value: string; color: string | undefined }[]).map(({ label, value, color }) => (
+                      <div key={label} className="drawer-stat-item">
+                        <span className="drawer-meta-label">{label}</span>
+                        <span className="drawer-meta-value" style={color ? { color } : undefined}>{value}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {drawerDetails.sources.length > 0 && (
+                    <div style={{ marginTop: "0.875rem" }}>
+                      <p className="drawer-section-title" style={{ marginBottom: "0.375rem" }}>Top Sources</p>
+                      <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+                        {drawerDetails.sources.map((s) => (
+                          <li
+                            key={s.source}
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              padding: "0.25rem 0",
+                              fontSize: "0.82rem",
+                              borderBottom: "1px solid var(--color-border)"
+                            }}
+                          >
+                            <span>{s.source}</span>
+                            <span style={{ fontWeight: 600 }}>{s.count}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Actions */}
               {selected.status !== "RESOLVED" && (

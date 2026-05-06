@@ -25,7 +25,9 @@ const eventSchema = z
     sentimentLabel: z.enum(["POSITIVE", "NEUTRAL", "NEGATIVE"]),
     source:         z.string().min(1).max(120),
     timestamp:      z.string().datetime().optional(),
-    volumeWeight:   z.number().int().min(1).max(100).default(1)
+    volumeWeight:   z.number().int().min(1).max(100).default(1),
+    headline:       z.string().max(220).optional(),
+    snippet:        z.string().max(500).optional()
   })
   .refine((d) => d.countyName !== undefined || d.countyCode !== undefined, {
     message: "Provide countyName or countyCode"
@@ -67,6 +69,8 @@ router.post(
       source: string;
       timestamp: Date;
       volumeWeight: number;
+      headline?: string;
+      snippet?: string;
     }[] = [];
 
     const skipped: { index: number; reason: string }[] = [];
@@ -97,7 +101,9 @@ router.post(
         sentimentLabel: e.sentimentLabel,
         source: e.source,
         timestamp: e.timestamp ? new Date(e.timestamp) : new Date(),
-        volumeWeight: e.volumeWeight
+        volumeWeight: e.volumeWeight,
+        ...(e.headline ? { headline: e.headline } : {}),
+        ...(e.snippet  ? { snippet:  e.snippet  } : {})
       });
     }
 
