@@ -3,12 +3,14 @@ import time
 
 import schedule
 
-from config import SCRAPE_INTERVAL_MINUTES
+from config import FACEBOOK_ENABLED, INSTAGRAM_ENABLED, SCRAPE_INTERVAL_MINUTES
 from dedup import init_db, is_seen, mark_seen, purge_old
 from ingest_client import post_events
 from nlp.county_detector import detect_county
 from nlp.sentiment import analyze
 from nlp.topic_detector import detect_topics
+from scrapers.facebook_pages import FacebookPagesScraper
+from scrapers.instagram_pages import InstagramScraper
 from scrapers.reddit_kenya import RedditScraper
 from scrapers.rss_feeds import RssFeedScraper
 
@@ -20,6 +22,10 @@ logging.basicConfig(
 log = logging.getLogger("main")
 
 SCRAPERS = [RssFeedScraper(), RedditScraper()]
+if FACEBOOK_ENABLED:
+    SCRAPERS.append(FacebookPagesScraper())
+if INSTAGRAM_ENABLED:
+    SCRAPERS.append(InstagramScraper())
 
 
 def run_pipeline() -> None:
@@ -65,6 +71,8 @@ def run_pipeline() -> None:
                     "source":         article.source_name,
                     "timestamp":      article.published_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "volumeWeight":   1,
+                    "headline":       article.title[:220] if article.title else None,
+                    "snippet":        article.body[:500]  if article.body  else None,
                 })
             new_count += 1
 

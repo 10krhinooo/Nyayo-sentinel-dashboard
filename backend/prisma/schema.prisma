@@ -98,6 +98,8 @@ model SentimentEvent {
   sentimentLabel   SentimentLabel
   source           String
   volumeWeight     Int           @default(1)
+  headline         String?       @db.VarChar(220)
+  snippet          String?       @db.VarChar(500)
 
   county           County        @relation(fields: [countyId], references: [id])
   topic            Topic         @relation(fields: [topicId], references: [id])
@@ -151,6 +153,7 @@ model Alert {
   triggeredAt  DateTime      @default(now())
   status       AlertStatus   @default(OPEN)
   summary      String
+  llmSummary   String?
 
   county       County        @relation(fields: [countyId], references: [id])
   topic        Topic?        @relation(fields: [topicId], references: [id])

@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { env } from "../config/env";
+import type { AlertStats, TopicContext } from "../types/topicContext";
 
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
@@ -75,7 +76,9 @@ export async function sendOtpEmail(to: string, code: string) {
 
 export async function sendAlertEmail(
   recipients: string[],
-  alert: { id: string; summary: string; severity: string; countyId: string; triggeredAt: Date; county?: { name: string } | null; topic?: { name: string } | null }
+  alert: { id: string; summary: string; llmSummary?: string; severity: string; countyId: string; triggeredAt: Date; county?: { name: string } | null; topic?: { name: string } | null },
+  stats?: AlertStats,
+  topicContext?: TopicContext
 ) {
   const severityColor: Record<string, string> = {
     LOW: "#92400e",
@@ -87,6 +90,50 @@ export async function sendAlertEmail(
   const county = alert.county?.name ?? alert.countyId;
   const topic = alert.topic?.name ?? "General";
   const link = `${env.FRONTEND_URL}/alerts`;
+
+  const llmSummaryHtml = alert.llmSummary
+    ? `
+      <div style="margin:0 0 1.25rem;padding:0.875rem 1rem;background:#eff6ff;border-left:3px solid #3b82f6">
+        <p style="margin:0 0 0.375rem;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#64748b">AI Analysis</p>
+        <p style="margin:0;font-size:0.875rem;color:#1e3a5f;line-height:1.6">${alert.llmSummary}</p>
+      </div>`
+    : "";
+
+  const topicContextHtml = topicContext
+    ? `
+      <div style="margin:0 0 1.25rem;padding:0.875rem 1rem;background:#f0fdf4;border-left:3px solid #16a34a">
+        <p style="margin:0 0 0.375rem;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#64748b">Topic Context</p>
+        <p style="margin:0 0 0.4rem;font-size:0.85rem;color:#374151;line-height:1.5">${topicContext.description}</p>
+        <p style="margin:0;font-size:0.78rem;color:#64748b">Key areas: ${topicContext.keyAreas.join(" · ")}</p>
+      </div>`
+    : "";
+
+  const statsHtml = stats && stats.eventCount > 0
+    ? `
+      <div style="margin:0 0 1.25rem">
+        <p style="margin:0 0 0.5rem;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#64748b">Alert Statistics (24-hour window)</p>
+        <table style="width:100%;border-collapse:collapse;font-size:0.8rem">
+          <tr style="background:#f8fafc">
+            <td style="padding:0.35rem 0.75rem;border:1px solid #e2e8f0;font-weight:600">Total Events</td>
+            <td style="padding:0.35rem 0.75rem;border:1px solid #e2e8f0">${stats.eventCount}</td>
+          </tr>
+          <tr>
+            <td style="padding:0.35rem 0.75rem;border:1px solid #e2e8f0;font-weight:600">Negative Sentiment</td>
+            <td style="padding:0.35rem 0.75rem;border:1px solid #e2e8f0">${stats.negativePercent}% (${stats.negativeCount} events)</td>
+          </tr>
+          ${stats.avgScore !== null ? `
+          <tr style="background:#f8fafc">
+            <td style="padding:0.35rem 0.75rem;border:1px solid #e2e8f0;font-weight:600">Avg. Score</td>
+            <td style="padding:0.35rem 0.75rem;border:1px solid #e2e8f0">${stats.avgScore.toFixed(2)}</td>
+          </tr>` : ""}
+        </table>
+        ${stats.sources.length > 0 ? `
+        <p style="margin:0.75rem 0 0.25rem;font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#64748b">Top Sources</p>
+        <ul style="margin:0;padding:0;list-style:none;font-size:0.8rem;color:#374151">
+          ${stats.sources.map(s => `<li style="padding:0.15rem 0">• ${s.source}: <strong>${s.count}</strong></li>`).join("")}
+        </ul>` : ""}
+      </div>`
+    : "";
 
   for (const to of recipients) {
     await send(
@@ -102,6 +149,9 @@ export async function sendAlertEmail(
           <p style="margin:0 0 0.5rem"><strong>Summary:</strong> ${alert.summary}</p>
           <p style="margin:0"><strong>Triggered:</strong> ${new Date(alert.triggeredAt).toUTCString()}</p>
         </div>
+        ${llmSummaryHtml}
+        ${topicContextHtml}
+        ${statsHtml}
         <p style="text-align:center">
           <a href="${link}" style="background:#006600;color:#fff;padding:0.6rem 1.5rem;border-radius:0.4rem;text-decoration:none;font-weight:bold">
             View Alerts Dashboard
