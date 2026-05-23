@@ -65,3 +65,29 @@ describe("clearUser", () => {
     expect(getUser()).toBeNull();
   });
 });
+
+describe("SSR safety (typeof window === 'undefined' guards)", () => {
+  let savedWindow: typeof globalThis.window;
+
+  beforeEach(() => {
+    savedWindow = globalThis.window;
+    // @ts-expect-error — simulate server-side environment where window is absent
+    delete globalThis.window;
+  });
+
+  afterEach(() => {
+    globalThis.window = savedWindow;
+  });
+
+  it("getUser returns null in SSR context", () => {
+    expect(getUser()).toBeNull();
+  });
+
+  it("setUser is a no-op in SSR context (does not throw)", () => {
+    expect(() => setUser(SAMPLE_USER)).not.toThrow();
+  });
+
+  it("clearUser is a no-op in SSR context (does not throw)", () => {
+    expect(() => clearUser()).not.toThrow();
+  });
+});
