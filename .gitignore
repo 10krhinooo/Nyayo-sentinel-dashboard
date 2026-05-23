@@ -68,3 +68,16 @@ scraper/**/__pycache__/
 scraper/*.pyc
 scraper/*.db
 scraper/models/
+scraper/.coverage
+scraper/scraper_health.json
+
+# =========================
+# Test coverage reports
+# =========================
+**/coverage/
+**/.nyc_output/
+
+# =========================
+# TypeScript build info
+# =========================
+**/*.tsbuildinfo
