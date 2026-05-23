@@ -5,6 +5,7 @@ lxml_html_clean==0.4.3
 feedparser==6.0.11
 facebook-scraper==0.2.59
 instaloader==4.13.1
+langdetect==1.0.9
 
 transformers==4.41.2
 sentencepiece==0.2.0
@@ -12,3 +13,8 @@ protobuf>=4.0.0
 
 schedule==1.2.2
 python-dotenv==1.0.1
+
+# Testing
+pytest==8.2.2
+pytest-mock==3.14.0
+responses==0.25.3
