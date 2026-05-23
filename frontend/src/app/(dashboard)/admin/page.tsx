@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../lib/api";
 import { getUser } from "../../../lib/auth";
+import { useToast } from "../../../lib/toastContext";
+import { ConfirmModal } from "../../../components/ConfirmModal";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,6 +44,7 @@ const defaultThresholdForm = {
 };
 
 function ThresholdsTab() {
+  const { showToast } = useToast();
   const [thresholds, setThresholds] = useState<Threshold[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +52,7 @@ function ThresholdsTab() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  async function loadThresholds() {
+  const loadThresholds = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -60,9 +63,9 @@ function ThresholdsTab() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  useEffect(() => { void loadThresholds(); }, []);
+  useEffect(() => { void loadThresholds(); }, [loadThresholds]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -82,6 +85,7 @@ function ThresholdsTab() {
         topicId: form.topicId.trim() || undefined,
       });
       setForm(defaultThresholdForm);
+      showToast("Threshold created.");
       await loadThresholds();
     } catch {
       setFormError("Failed to create threshold. Please check your inputs and try again.");
@@ -92,7 +96,12 @@ function ThresholdsTab() {
 
   return (
     <>
-      {error && <div className="error-banner">{error}</div>}
+      {error && (
+        <div className="retry-banner" style={{ marginBottom: "1rem" }}>
+          <span>{error}</span>
+          <button className="btn-action" onClick={() => void loadThresholds()}>Retry</button>
+        </div>
+      )}
       <div className="card" style={{ marginBottom: "1.5rem" }}>
         <div className="card-title">Alert Thresholds</div>
         {loading ? (
@@ -120,7 +129,7 @@ function ThresholdsTab() {
                   </tr>
                 ))}
                 {thresholds.length === 0 && (
-                  <tr><td colSpan={6}>No thresholds configured yet.</td></tr>
+                  <tr><td colSpan={6} style={{ color: "var(--color-muted)", textAlign: "center" }}>No thresholds configured yet.</td></tr>
                 )}
               </tbody>
             </table>
@@ -130,20 +139,20 @@ function ThresholdsTab() {
 
       <div className="card">
         <div className="card-title">Add Alert Threshold</div>
-        {formError && <div className="error-banner">{formError}</div>}
+        {formError && <div className="error-banner" style={{ marginBottom: "0.75rem" }}>{formError}</div>}
         <form onSubmit={(e) => void handleSubmit(e)} style={{ display: "flex", flexDirection: "column", gap: "0.75rem", maxWidth: 480 }}>
           <label>
             <span className="form-label">Metric Type</span>
             <select className="form-input" value={form.metricType} onChange={(e) => setForm((f) => ({ ...f, metricType: e.target.value as MetricType }))}>
-              <option value="NEGATIVE_PERCENT">NEGATIVE_PERCENT (0–100%)</option>
-              <option value="SPIKE_FACTOR">SPIKE_FACTOR (&gt;1x)</option>
+              <option value="NEGATIVE_PERCENT">NEGATIVE_PERCENT — % of events that are negative (0–100)</option>
+              <option value="SPIKE_FACTOR">SPIKE_FACTOR — volume multiplier vs. previous 24h (must be &gt; 1)</option>
             </select>
           </label>
           <label>
             <span className="form-label">Threshold Value{form.metricType === "NEGATIVE_PERCENT" ? " (%)" : " (factor)"}</span>
             <input className="form-input" type="number" step="0.1" min="0" value={form.thresholdVal}
               onChange={(e) => setForm((f) => ({ ...f, thresholdVal: e.target.value }))}
-              placeholder={form.metricType === "NEGATIVE_PERCENT" ? "e.g. 40" : "e.g. 2.5"} required />
+              placeholder={form.metricType === "NEGATIVE_PERCENT" ? "e.g. 40 (fire when 40% of events are negative)" : "e.g. 2.5 (fire when volume is 2.5× baseline)"} required />
           </label>
           <label>
             <span className="form-label">Severity</span>
@@ -153,12 +162,12 @@ function ThresholdsTab() {
             </select>
           </label>
           <label>
-            <span className="form-label">County ID (optional)</span>
-            <input className="form-input" type="text" value={form.countyId} onChange={(e) => setForm((f) => ({ ...f, countyId: e.target.value }))} placeholder="County cuid" />
+            <span className="form-label">County ID (optional — leave blank for all counties)</span>
+            <input className="form-input" type="text" value={form.countyId} onChange={(e) => setForm((f) => ({ ...f, countyId: e.target.value }))} placeholder="County cuid (from database)" />
           </label>
           <label>
-            <span className="form-label">Topic ID (optional)</span>
-            <input className="form-input" type="text" value={form.topicId} onChange={(e) => setForm((f) => ({ ...f, topicId: e.target.value }))} placeholder="Topic cuid" />
+            <span className="form-label">Topic ID (optional — leave blank for all topics)</span>
+            <input className="form-input" type="text" value={form.topicId} onChange={(e) => setForm((f) => ({ ...f, topicId: e.target.value }))} placeholder="Topic cuid (from database)" />
           </label>
           <button type="submit" className="btn-primary" disabled={submitting}>{submitting ? "Creating…" : "Create Threshold"}</button>
         </form>
@@ -172,6 +181,7 @@ function ThresholdsTab() {
 const defaultUserForm = { email: "", role: "ANALYST" as Role, countyCode: "" };
 
 function UsersTab() {
+  const { showToast } = useToast();
   const currentUser = getUser();
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -180,11 +190,11 @@ function UsersTab() {
   const [form, setForm] = useState(defaultUserForm);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{ role: Role; countyCode: string }>({ role: "ANALYST", countyCode: "" });
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; email: string } | null>(null);
 
-  async function loadUsers() {
+  const loadUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -195,9 +205,9 @@ function UsersTab() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  useEffect(() => { void loadUsers(); }, []);
+  useEffect(() => { void loadUsers(); }, [loadUsers]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -209,10 +219,9 @@ function UsersTab() {
         role: form.role,
         countyCode: form.role === "COUNTY_OFFICIAL" ? form.countyCode || undefined : undefined,
       });
-      setFormSuccess(`Invite sent to ${form.email}. Please ask the user to check their email inbox (including spam) to set their password.`);
+      showToast(`Invite sent to ${form.email}.`);
       setForm(defaultUserForm);
       setShowForm(false);
-      setTimeout(() => setFormSuccess(null), 5000);
       await loadUsers();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -229,19 +238,22 @@ function UsersTab() {
         countyCode: editForm.role === "COUNTY_OFFICIAL" ? editForm.countyCode || null : null,
       });
       setEditingId(null);
+      showToast("User updated.");
       await loadUsers();
     } catch {
-      alert("Failed to update user.");
+      showToast("Failed to update user.", "error");
     }
   }
 
-  async function handleDelete(id: string, email: string) {
-    if (!confirm(`Delete user ${email}? This cannot be undone.`)) return;
+  async function handleDelete(id: string) {
     try {
       await api.delete(`/users/${id}`);
+      setDeleteTarget(null);
+      showToast("User deleted.");
       await loadUsers();
     } catch {
-      alert("Failed to delete user.");
+      setDeleteTarget(null);
+      showToast("Failed to delete user.", "error");
     }
   }
 
@@ -253,12 +265,22 @@ function UsersTab() {
 
   return (
     <>
-      {error && <div className="error-banner">{error}</div>}
-      {formSuccess && (
-        <div style={{ background: "#dcfce7", color: "#15803d", padding: "0.75rem 1rem", borderRadius: "0.4rem", marginBottom: "1rem", fontSize: "0.875rem", borderLeft: "4px solid #16a34a", display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><polyline points="20 6 9 17 4 12"/></svg>
-          <span>{formSuccess}</span>
+      {error && (
+        <div className="retry-banner" style={{ marginBottom: "1rem" }}>
+          <span>{error}</span>
+          <button className="btn-action" onClick={() => void loadUsers()}>Retry</button>
         </div>
+      )}
+
+      {deleteTarget && (
+        <ConfirmModal
+          title="Delete user"
+          body={`Delete ${deleteTarget.email}? This cannot be undone and will remove all their access.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => void handleDelete(deleteTarget.id)}
+          onCancel={() => setDeleteTarget(null)}
+        />
       )}
 
       <div className="card" style={{ marginBottom: "1.5rem" }}>
@@ -273,7 +295,7 @@ function UsersTab() {
           <form onSubmit={(e) => void handleCreate(e)} style={{ display: "flex", flexDirection: "column", gap: "0.75rem", maxWidth: 480, marginBottom: "1.5rem", padding: "1rem", background: "var(--color-bg)", borderRadius: "0.5rem" }}>
             {formError && <div className="error-banner">{formError}</div>}
             <div style={{ fontSize: "0.8rem", color: "var(--color-muted)", padding: "0.5rem 0.75rem", background: "#eff6ff", borderRadius: "0.375rem", border: "1px solid #bfdbfe" }}>
-              An invite email will be sent to the user so they can set their own password.
+              An invite email will be sent so the user can set their own password.
             </div>
             <label>
               <span className="form-label">Email</span>
@@ -306,7 +328,7 @@ function UsersTab() {
           <div className="table-wrapper">
             <table className="table">
               <thead>
-                <tr><th>Email</th><th>Role</th><th>County</th><th>MFA</th><th>Created</th><th>Actions</th></tr>
+                <tr><th>Email</th><th>Role</th><th>County</th><th>MFA</th><th className="col-hide-mobile">Created</th><th>Actions</th></tr>
               </thead>
               <tbody>
                 {users.map((u) => (
@@ -336,7 +358,7 @@ function UsersTab() {
                       )}
                     </td>
                     <td>{u.mustSetPassword ? <span style={{ color: "var(--color-warning)", fontSize: "0.8rem" }}>Invite pending</span> : u.mfaEnabled ? "Enabled" : "Off"}</td>
-                    <td>{new Date(u.createdAt).toLocaleDateString()}</td>
+                    <td className="col-hide-mobile">{new Date(u.createdAt).toLocaleDateString()}</td>
                     <td>
                       {u.id === currentUser?.id ? (
                         <span style={{ color: "var(--color-muted)", fontSize: "0.8rem" }}>You</span>
@@ -351,8 +373,8 @@ function UsersTab() {
                             onClick={() => { setEditingId(u.id); setEditForm({ role: u.role, countyCode: u.county?.code ?? "" }); }}>
                             Edit
                           </button>
-                          <button style={{ padding: "0.2rem 0.6rem", fontSize: "0.8rem", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: "0.375rem", cursor: "pointer" }}
-                            onClick={() => void handleDelete(u.id, u.email)}>
+                          <button className="btn-danger" style={{ padding: "0.2rem 0.6rem", fontSize: "0.8rem" }}
+                            onClick={() => setDeleteTarget({ id: u.id, email: u.email })}>
                             Delete
                           </button>
                         </div>
@@ -361,7 +383,7 @@ function UsersTab() {
                   </tr>
                 ))}
                 {users.length === 0 && (
-                  <tr><td colSpan={6}>No users found.</td></tr>
+                  <tr><td colSpan={6} style={{ color: "var(--color-muted)", textAlign: "center" }}>No users found. Use "+ Add User" to invite someone.</td></tr>
                 )}
               </tbody>
             </table>
@@ -393,14 +415,18 @@ export default function AdminPage() {
     <>
       <h1 className="page-title">Admin Panel</h1>
 
-      <div className="admin-tabs">
+      <div className="admin-tabs" role="tablist">
         <button
+          role="tab"
+          aria-selected={activeTab === "users"}
           className={`admin-tab${activeTab === "users" ? " admin-tab-active" : ""}`}
           onClick={() => setActiveTab("users")}
         >
           Users
         </button>
         <button
+          role="tab"
+          aria-selected={activeTab === "thresholds"}
           className={`admin-tab${activeTab === "thresholds" ? " admin-tab-active" : ""}`}
           onClick={() => setActiveTab("thresholds")}
         >

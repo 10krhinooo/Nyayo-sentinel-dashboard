@@ -84,4 +84,12 @@ export interface SentimentOverview {
   sentimentScore: number;
   trendByDay: { day: string; avg_score: number }[];
   topEmergingTopics: { topicId: string; name: string; negativeCount: number }[];
+  kpis: {
+    eventsToday: number;
+    eventsYesterday: number;
+    openAlerts: number;
+    countiesAtRisk: number;
+    mostActiveCounty: string | null;
+    countiesWithData: number;
+  } | null;
 }
