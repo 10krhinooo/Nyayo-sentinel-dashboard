@@ -19,6 +19,7 @@ import reportsRoutes from "./routes/reports";
 import usersRoutes from "./routes/users";
 import profileRoutes from "./routes/profile";
 import ingestRoutes from "./routes/ingest";
+import eventsRoutes from "./routes/events";
 
 const app = express();
 
@@ -97,6 +98,7 @@ app.use("/api/reports", apiLimiter, reportsRoutes);
 app.use("/api/users", apiLimiter, usersRoutes);
 app.use("/api/profile", apiLimiter, profileRoutes);
 app.use("/api/ingest", ingestRoutes);
+app.use("/api/events", apiLimiter, eventsRoutes);
 
 const server = http.createServer(app);
 

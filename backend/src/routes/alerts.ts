@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AlertSeverity, AlertStatus, MetricType, TriggerType, UserRole } from "@prisma/client";
+import { AlertSeverity, AlertStatus, MetricType, TriggerType, UserRole, Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { authenticate, requireRoles } from "../middleware/auth";
 import { audit } from "../middleware/audit";
@@ -22,9 +22,34 @@ router.get(
       const limit = Math.max(1, Math.min(100, parseInt(String(req.query.limit ?? String(PAGE_LIMIT)), 10) || PAGE_LIMIT));
       const skip = (page - 1) * limit;
 
-      const where: { countyId?: string } = {};
+      const search = String(req.query.search ?? "").trim();
+      const statusQ = String(req.query.status ?? "").trim();
+      const startDate = String(req.query.startDate ?? "").trim();
+      const endDate = String(req.query.endDate ?? "").trim();
+
+      const validStatuses = Object.values(AlertStatus) as string[];
+      const statusFilter = validStatuses.includes(statusQ) ? (statusQ as AlertStatus) : undefined;
+
+      const where: Prisma.AlertWhereInput = {};
       if (req.user?.role === UserRole.COUNTY_OFFICIAL && req.user.countyId) {
         where.countyId = req.user.countyId;
+      }
+      if (statusFilter) where.status = statusFilter;
+      if (startDate || endDate) {
+        where.triggeredAt = {};
+        if (startDate) where.triggeredAt.gte = new Date(startDate);
+        if (endDate) {
+          const end = new Date(endDate);
+          end.setHours(23, 59, 59, 999);
+          where.triggeredAt.lte = end;
+        }
+      }
+      if (search) {
+        where.OR = [
+          { county: { name: { contains: search, mode: "insensitive" } } },
+          { topic: { name: { contains: search, mode: "insensitive" } } },
+          { summary: { contains: search, mode: "insensitive" } }
+        ];
       }
 
       const [alerts, total] = await Promise.all([
@@ -50,12 +75,21 @@ router.get(
   authenticate(),
   requireRoles([UserRole.NATIONAL_ADMIN]),
   audit("VIEW_ALERT_THRESHOLDS", "ALERT_THRESHOLD"),
-  async (_req, res) => {
+  async (req, res) => {
     try {
-      const thresholds = await prisma.alertThreshold.findMany({
-        include: { county: true, topic: true }
-      });
-      return res.json({ thresholds });
+      const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+      const limit = Math.max(1, Math.min(200, parseInt(String(req.query.limit ?? "100"), 10) || 100));
+      const skip = (page - 1) * limit;
+
+      const [thresholds, total] = await Promise.all([
+        prisma.alertThreshold.findMany({
+          include: { county: true, topic: true },
+          skip,
+          take: limit,
+        }),
+        prisma.alertThreshold.count(),
+      ]);
+      return res.json({ thresholds, total, page, limit });
     } catch {
       return res.status(500).json({ message: "Internal server error" });
     }

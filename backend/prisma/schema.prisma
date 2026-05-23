@@ -160,6 +160,8 @@ model Alert {
 
   @@index([status])
   @@index([countyId])
+  @@index([topicId])
+  @@index([triggeredAt])
 }
 
 enum TriggerType {
@@ -183,5 +185,8 @@ model AuditLog {
   metadata     Json?
 
   user         User?    @relation(fields: [userId], references: [id])
+
+  @@index([userId, timestamp])
+  @@index([action, timestamp])
 }
 

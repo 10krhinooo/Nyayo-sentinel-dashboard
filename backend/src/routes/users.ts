@@ -27,24 +27,33 @@ router.get(
   "/",
   ...adminOnly,
   audit("LIST_USERS", "USER"),
-  async (_req, res) => {
+  async (req, res) => {
     try {
-      const users = await prisma.user.findMany({
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          role: true,
-          countyId: true,
-          mfaEnabled: true,
-          mustSetPassword: true,
-          createdAt: true,
-          county: { select: { name: true, code: true } },
-        },
-        orderBy: { createdAt: "asc" },
-      });
-      return res.json({ users });
+      const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+      const limit = Math.max(1, Math.min(200, parseInt(String(req.query.limit ?? "100"), 10) || 100));
+      const skip = (page - 1) * limit;
+
+      const [users, total] = await Promise.all([
+        prisma.user.findMany({
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            role: true,
+            countyId: true,
+            mfaEnabled: true,
+            mustSetPassword: true,
+            createdAt: true,
+            county: { select: { name: true, code: true } },
+          },
+          orderBy: { createdAt: "asc" },
+          skip,
+          take: limit,
+        }),
+        prisma.user.count(),
+      ]);
+      return res.json({ users, total, page, limit });
     } catch {
       return res.status(500).json({ message: "Internal server error" });
     }
@@ -78,7 +87,8 @@ router.post(
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
-      return res.status(409).json({ message: "A user with that email already exists." });
+      // Generic message to prevent email enumeration
+      return res.status(201).json({ invited: true });
     }
 
     const inviteToken = randomUUID();
