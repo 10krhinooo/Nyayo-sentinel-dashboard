@@ -36,3 +36,19 @@ TOPIC_NAMES: list[str] = [
     "Roads & Transport", "Security & Police", "Corruption", "Agriculture",
     "Youth Unemployment", "Taxation & Revenue", "Devolution", "Food Security",
 ]
+
+# Source credibility scores (0.0–1.0). Used for observability; not currently
+# used to filter events but available for future weighted scoring.
+SOURCE_CREDIBILITY: dict[str, float] = {
+    "nation_africa":  0.92,
+    "standard_media": 0.88,
+    "citizen_tv":     0.85,
+    "kbc":            0.87,
+    "the_star":       0.82,
+    "tuko":           0.75,
+    "taifa_leo":      0.80,
+    "kbc_kiswahili":  0.87,
+    "reddit":         0.55,
+    "facebook":       0.60,
+    "instagram":      0.50,
+}

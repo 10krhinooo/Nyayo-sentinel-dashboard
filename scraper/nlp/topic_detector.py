@@ -98,12 +98,24 @@ _TOPIC_KEYWORDS: dict[str, list[str]] = {
 }
 
 
-def detect_topics(text: str) -> list[str]:
-    """Return list of canonical topic names found in text (may be multiple)."""
+def detect_topics(text: str) -> list[tuple[str, float]]:
+    """Return list of (topic, confidence) tuples found in text.
+
+    Confidence: 1 strong keyword match = 0.90, 2+ regular matches = 0.75,
+    1 regular match = 0.60. Strong keywords are those >= 8 chars (more specific).
+    """
     text_lower = text.lower()
-    matched = [
-        topic
-        for topic, keywords in _TOPIC_KEYWORDS.items()
-        if any(kw in text_lower for kw in keywords)
-    ]
-    return matched
+    results: list[tuple[str, float]] = []
+    for topic, keywords in _TOPIC_KEYWORDS.items():
+        matches = [kw for kw in keywords if kw in text_lower]
+        if not matches:
+            continue
+        strong = [kw for kw in matches if len(kw) >= 8]
+        if strong:
+            confidence = 0.90
+        elif len(matches) >= 2:
+            confidence = 0.75
+        else:
+            confidence = 0.60
+        results.append((topic, confidence))
+    return results
