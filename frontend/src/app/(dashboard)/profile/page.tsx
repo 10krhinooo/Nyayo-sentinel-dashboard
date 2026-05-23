@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../../lib/api";
 import { setUser } from "../../../lib/auth";
+import { useToast } from "../../../lib/toastContext";
 
 type Role = "NATIONAL_ADMIN" | "COUNTY_OFFICIAL" | "ANALYST";
 
@@ -26,6 +27,7 @@ const ROLE_LABELS: Record<Role, string> = {
 };
 
 export default function ProfilePage() {
+  const { showToast } = useToast();
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -75,6 +77,7 @@ export default function ProfilePage() {
       setUser({ id: res.data.user.id, email: res.data.user.email, firstName: res.data.user.firstName, lastName: res.data.user.lastName, role: res.data.user.role, countyId: res.data.user.countyId });
       setEditingProfile(false);
       setProfileSuccess(true);
+      showToast("Profile updated.");
       setTimeout(() => setProfileSuccess(false), 3000);
     } catch {
       setProfileError("Failed to save profile.");
@@ -95,6 +98,7 @@ export default function ProfilePage() {
       setNewPassword("");
       setConfirmPassword("");
       setPwSuccess(true);
+      showToast("Password changed successfully.");
       setTimeout(() => setPwSuccess(false), 4000);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? "Failed to change password.";

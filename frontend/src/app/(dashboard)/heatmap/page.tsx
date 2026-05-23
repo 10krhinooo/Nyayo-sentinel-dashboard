@@ -1,26 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "../../../lib/api";
 import { getUser } from "../../../lib/auth";
 import { KenyaHeatmap, type HeatmapCounty } from "../../../components/KenyaHeatmap";
 import { ConstituencyHeatmap, type ConstituencyData } from "../../../components/ConstituencyHeatmap";
 import { SubCountyHeatmap, type SubCountyData } from "../../../components/SubCountyHeatmap";
 
-interface HeatmapResponse {
-  counties: HeatmapCounty[];
-}
-
-interface ConstituencyResponse {
-  constituencies: ConstituencyData[];
-}
-
-interface SubCountyResponse {
-  subcounties: SubCountyData[];
-}
+interface HeatmapResponse { counties: HeatmapCounty[]; }
+interface ConstituencyResponse { constituencies: ConstituencyData[]; }
+interface SubCountyResponse { subcounties: SubCountyData[]; }
 
 export default function HeatmapPage() {
   const user = getUser();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const isCountyOfficial = user?.role === "COUNTY_OFFICIAL";
 
   const [data, setData] = useState<HeatmapCounty[]>([]);
@@ -28,48 +23,54 @@ export default function HeatmapPage() {
   const [countyName, setCountyName] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [drillDown, setDrillDown] = useState<{ countyId: string; countyName: string } | null>(null);
   const [subCountyData, setSubCountyData] = useState<SubCountyData[]>([]);
   const [subCountyLoading, setSubCountyLoading] = useState(false);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await api.get<HeatmapResponse>("/counties/heatmap");
-        setData(res.data.counties);
+  // Drill-down state from URL
+  const drillCountyId = searchParams.get("county");
+  const drillCountyName = searchParams.get("countyName") ?? "";
 
-        if (isCountyOfficial && user?.countyId) {
-          // Find the county name from the heatmap data
-          const county = res.data.counties.find((c) => c.countyId === user.countyId);
-          if (county) setCountyName(county.countyName);
-
-          const constRes = await api.get<ConstituencyResponse>(
-            `/counties/${user.countyId}/constituencies/heatmap`
-          );
-          setConstituencyData(constRes.data.constituencies);
-        }
-      } catch {
-        setError("Failed to load heatmap data. Please refresh the page.");
-      } finally {
-        setLoading(false);
-      }
-    }
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function handleCountyClick(countyId: string, name: string) {
-    setDrillDown({ countyId, countyName: name });
-    setSubCountyLoading(true);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const res = await api.get<SubCountyResponse>(`/counties/${countyId}/subcounties/heatmap`);
-      setSubCountyData(res.data.subcounties);
+      const res = await api.get<HeatmapResponse>("/counties/heatmap");
+      setData(res.data.counties);
+
+      if (isCountyOfficial && user?.countyId) {
+        const county = res.data.counties.find((c) => c.countyId === user.countyId);
+        if (county) setCountyName(county.countyName);
+        const constRes = await api.get<ConstituencyResponse>(`/counties/${user.countyId}/constituencies/heatmap`);
+        setConstituencyData(constRes.data.constituencies);
+      }
     } catch {
-      setSubCountyData([]);
+      setError("Failed to load heatmap data.");
     } finally {
-      setSubCountyLoading(false);
+      setLoading(false);
     }
+  }, [isCountyOfficial, user?.countyId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  // Load sub-county data when drill-down county changes via URL
+  useEffect(() => {
+    if (!drillCountyId) { setSubCountyData([]); return; }
+    setSubCountyLoading(true);
+    api.get<SubCountyResponse>(`/counties/${drillCountyId}/subcounties/heatmap`)
+      .then((res) => setSubCountyData(res.data.subcounties))
+      .catch(() => setSubCountyData([]))
+      .finally(() => setSubCountyLoading(false));
+  }, [drillCountyId]);
+
+  function handleCountyClick(countyId: string, name: string) {
+    router.push(`/heatmap?county=${countyId}&countyName=${encodeURIComponent(name)}`);
   }
+
+  function handleBack() {
+    router.push("/heatmap");
+  }
+
+  const drillDown = drillCountyId ? { countyId: drillCountyId, countyName: drillCountyName } : null;
 
   return (
     <>
@@ -81,7 +82,12 @@ export default function HeatmapPage() {
           : "County-Level Sentiment Heatmap"}
       </h1>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && (
+        <div className="retry-banner">
+          <span>{error}</span>
+          <button className="btn-action" onClick={() => void load()}>Retry</button>
+        </div>
+      )}
 
       {/* Constituency heatmap for county officials */}
       {isCountyOfficial && (
@@ -91,10 +97,7 @@ export default function HeatmapPage() {
             <div className="skeleton-block" style={{ height: 420 }} />
           ) : (
             <>
-              <ConstituencyHeatmap
-                countyName={countyName}
-                data={constituencyData}
-              />
+              <ConstituencyHeatmap countyName={countyName} data={constituencyData} />
               <div style={{ marginTop: "1rem" }}>
                 <div className="table-wrapper">
                   <table className="table">
@@ -118,9 +121,7 @@ export default function HeatmapPage() {
                           </tr>
                         ))}
                       {constituencyData.length === 0 && (
-                        <tr>
-                          <td colSpan={4}>No constituency data available yet.</td>
-                        </tr>
+                        <tr><td colSpan={4}>No constituency data available yet.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -131,7 +132,7 @@ export default function HeatmapPage() {
         </div>
       )}
 
-      {/* National heatmap — zoomed to county for county officials, with subcounty drill-down */}
+      {/* National heatmap with drill-down */}
       <div className="card">
         <div className="card-title">
           {drillDown
@@ -153,7 +154,7 @@ export default function HeatmapPage() {
               <SubCountyHeatmap
                 countyName={drillDown.countyName}
                 data={subCountyData}
-                onBack={() => { setDrillDown(null); setSubCountyData([]); }}
+                onBack={handleBack}
               />
             )}
             <div style={{ marginTop: "1rem" }}>
@@ -171,7 +172,10 @@ export default function HeatmapPage() {
                     {subCountyData
                       .sort((a, b) => b.negativeRatio - a.negativeRatio)
                       .map((s) => (
-                        <tr key={s.subCountyId}>
+                        <tr key={s.subCountyId}
+                          tabIndex={0}
+                          style={{ cursor: "default" }}
+                        >
                           <td>{s.name}</td>
                           <td>{s.avgScore.toFixed(2)}</td>
                           <td>{Math.round(s.negativeRatio * 100)}%</td>
@@ -179,9 +183,7 @@ export default function HeatmapPage() {
                         </tr>
                       ))}
                     {subCountyData.length === 0 && (
-                      <tr>
-                        <td colSpan={4}>No subcounty data available yet.</td>
-                      </tr>
+                      <tr><td colSpan={4}>No subcounty data available yet.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -208,7 +210,13 @@ export default function HeatmapPage() {
                   </thead>
                   <tbody>
                     {data.map((c) => (
-                      <tr key={c.countyId}>
+                      <tr
+                        key={c.countyId}
+                        className="clickable-row"
+                        tabIndex={0}
+                        onClick={() => handleCountyClick(c.countyId, c.countyName)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleCountyClick(c.countyId, c.countyName); } }}
+                      >
                         <td>{c.countyName}</td>
                         <td>{c.avgScore.toFixed(2)}</td>
                         <td>{Math.round(c.negativeRatio * 100)}%</td>
@@ -216,9 +224,7 @@ export default function HeatmapPage() {
                       </tr>
                     ))}
                     {data.length === 0 && (
-                      <tr>
-                        <td colSpan={4}>No sentiment data available yet.</td>
-                      </tr>
+                      <tr><td colSpan={4}>No sentiment data available yet.</td></tr>
                     )}
                   </tbody>
                 </table>

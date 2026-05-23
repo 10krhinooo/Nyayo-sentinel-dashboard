@@ -15,6 +15,8 @@ FEEDS = [
     ("standard_media",  "https://www.standardmedia.co.ke/rss/kenya.xml"),
     ("citizen_tv",      "https://citizentv.co.ke/feed/"),
     ("kbc",             "https://www.kbc.co.ke/feed/"),
+    ("the_star",        "https://www.the-star.co.ke/feed/"),
+    ("tuko",            "https://www.tuko.co.ke/rss"),
     # Swahili-language sources
     ("taifa_leo",       "https://taifaleodaily.co.ke/feed/"),
     ("kbc_kiswahili",   "https://www.kbc.co.ke/category/kiswahili/feed/"),

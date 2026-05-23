@@ -72,9 +72,26 @@ def _build_patterns() -> list[tuple[str, re.Pattern]]:
 _PATTERNS = _build_patterns()
 
 
-def detect_county(text: str) -> str | None:
-    """Return canonical county name if found in text, else None."""
+def detect_county(text: str) -> tuple[str, float] | tuple[None, float]:
+    """Return (county_name, confidence) or (None, 0.0) if no match.
+
+    Confidence: regex alias match = 0.85, exact county name match = 0.90,
+    both agree = 1.0 (alias hit for a county whose canonical name also appears).
+    """
+    text_lower = text.lower()
     for county_name, pattern in _PATTERNS:
         if pattern.search(text):
-            return county_name
-    return None
+            canonical_hit = bool(re.search(r"\b" + re.escape(county_name.lower()) + r"\b", text_lower))
+            alias_hit = any(
+                re.search(r"\b" + re.escape(alias) + r"\b", text_lower)
+                for alias in _ALIASES.get(county_name, [])
+                if alias != county_name.lower()
+            )
+            if canonical_hit and alias_hit:
+                confidence = 1.0
+            elif canonical_hit:
+                confidence = 0.90
+            else:
+                confidence = 0.85
+            return county_name, confidence
+    return None, 0.0

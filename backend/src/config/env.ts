@@ -24,7 +24,7 @@ const envSchema = z.object({
 
   SCRAPER_API_KEY: z.string().min(32).optional(),
   INGEST_RATE_LIMIT_RPM: z.string().default("10"),
-  ANTHROPIC_API_KEY: z.string().optional()
+  OPENAI_API_KEY: z.string().optional()
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -55,7 +55,7 @@ SMTP_PASS=<gmail-app-password>
 FRONTEND_URL=http://localhost:3000
 SCRAPER_API_KEY=<min-32-char-random-string>
 INGEST_RATE_LIMIT_RPM=10
-ANTHROPIC_API_KEY=<sk-ant-...>   # optional — enables AI-generated alert summaries
+OPENAI_API_KEY=<sk-...>          # optional — enables AI-generated alert summaries (gpt-4o-mini)
 ```
 
 **`scraper/.env`** (not committed — copy from `scraper/.env.example`):
