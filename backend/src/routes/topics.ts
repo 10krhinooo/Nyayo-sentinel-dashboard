@@ -1,14 +1,15 @@
 import { Router } from "express";
-import { UserRole } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import { authenticate } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { resolveScope } from "../middleware/scope";
 import { audit } from "../middleware/audit";
 
 const router = Router();
 
 router.get(
   "/summary",
-  authenticate(true),
+  requireAuth(),
+  resolveScope(),
   audit("VIEW_TOPICS", "SENTIMENT"),
   async (req, res) => {
     try {
@@ -18,8 +19,10 @@ router.get(
       };
 
       const where: { countyId?: string; sentimentLabel?: "POSITIVE" | "NEUTRAL" | "NEGATIVE" } = {};
-      if (req.user?.role === UserRole.COUNTY_OFFICIAL && req.user.countyId) {
-        where.countyId = req.user.countyId;
+      // A county official is pinned to its own county and cannot widen the
+      // query with ?countyId=. National scope may filter freely.
+      if (!req.scope!.national) {
+        where.countyId = req.scope!.countyId!;
       } else if (countyId) {
         where.countyId = countyId;
       }

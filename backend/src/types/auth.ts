@@ -16,6 +16,7 @@ declare global {
 
     interface Request {
       user?: AuthUser;
+      scope?: import("../middleware/scope").RequestScope;
     }
   }
 }

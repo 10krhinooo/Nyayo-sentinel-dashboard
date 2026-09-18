@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { AlertStatus, UserRole } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import { authenticate } from "../middleware/auth";
+import { requireAuth, requireRoles } from "../middleware/auth";
+import { resolveScope, countyWhere } from "../middleware/scope";
 import { audit } from "../middleware/audit";
 import { generateAlertSummary } from "../services/llm";
 import { TOPIC_CONTEXT } from "../types/topicContext";
@@ -10,7 +11,8 @@ const router = Router();
 
 router.get(
   "/overview",
-  authenticate(true),
+  requireAuth(),
+  resolveScope(),
   audit("VIEW_DASHBOARD", "SENTIMENT"),
   async (req, res) => {
     try {
@@ -19,13 +21,8 @@ router.get(
       const oneDayAgo  = new Date(now.getTime() - 24 * 60 * 60 * 1000);
       const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
 
-      const countyScope =
-        req.user?.role === UserRole.COUNTY_OFFICIAL && req.user.countyId
-          ? req.user.countyId
-          : undefined;
-
-      const baseWhere: { countyId?: string } = {};
-      if (countyScope) baseWhere.countyId = countyScope;
+      const baseWhere: { countyId?: string } = countyWhere(req);
+      const countyScope = baseWhere.countyId;
 
       const [counts, avgResult] = await Promise.all([
         prisma.sentimentEvent.groupBy({
@@ -163,11 +160,10 @@ router.get(
 // AI national briefing — national admins/analysts only
 router.get(
   "/briefing",
-  authenticate(true),
-  async (req, res) => {
-    if (req.user?.role === UserRole.COUNTY_OFFICIAL) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
+  requireAuth(),
+  requireRoles([UserRole.NATIONAL_ADMIN, UserRole.ANALYST]),
+  resolveScope(),
+  async (_req, res) => {
     try {
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
