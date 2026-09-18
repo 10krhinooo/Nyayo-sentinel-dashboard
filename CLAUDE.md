@@ -71,7 +71,13 @@ DEDUP_DB_PATH=scraper_dedup.db
 NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
 ```
 
-No test suite is configured yet.
+### Tests
+```bash
+cd backend  && npm test        # Vitest + supertest
+cd frontend && npm test        # Vitest + jsdom + Testing Library
+cd scraper  && pytest          # pytest (needs requirements.txt installed)
+```
+All three run in CI on every pull request (`.github/workflows/ci.yml`).
 
 ---
 
@@ -132,11 +138,11 @@ app/
 - **`routes/alerts.ts`** — GET with pagination, POST threshold, PATCH status, `evaluateAlertThresholds()` (emails county officials + national admins on new alert). `notifyAlertRecipients()` fetches recent article headlines from DB, calls `generateAlertSummary()`, persists the result as `alert.llmSummary`, and passes it to the email. `GET /:id/details` includes `llmSummary` in its response.
 - **`routes/ingest.ts`** — `POST /api/ingest/events`: batch ingest endpoint for the scraper. Uses `requireApiKey` (not JWT). Accepts up to 500 events per request, resolves county/topic names to IDs, bulk-inserts `SentimentEvent` rows. Accepts optional `headline` (max 220 chars) and `snippet` (max 500 chars) per event for LLM context. Rate-limited at 10 req/min separately from the login limiter.
 - **`services/email.ts`** — Nodemailer Gmail SMTP transporter. Functions: `sendInviteEmail`, `sendOtpEmail`, `sendAlertEmail`, `sendPasswordChangedEmail`, `sendPasswordResetEmail`, `sendWelcomeEmail`. `sendAlertEmail` accepts an optional `llmSummary` string and renders an "AI Analysis" block in the email when present. Logs a warning and skips silently if SMTP_USER/SMTP_PASS are not set.
-- **`services/llm.ts`** — Lazy Anthropic client. `generateAlertSummary()` calls Claude Haiku with the county, topic, trigger type, stats, and up to 15 recent article headlines to produce a 2–3 sentence plain-English summary. Returns `null` if `ANTHROPIC_API_KEY` is not set or no headlines are available — callers degrade gracefully.
+- **`services/llm.ts`** — Lazy OpenAI client. `generateAlertSummary()` calls `gpt-4o-mini` with the county, topic, trigger type, stats, and up to 15 recent article headlines to produce a 2–3 sentence plain-English summary. Returns `null` if `OPENAI_API_KEY` is not set or no headlines are available — callers degrade gracefully.
 - **`middleware/auth.ts`** — `authenticate(optional?)`: reads JWT from `Authorization: Bearer` header or `nyayo_access_token` cookie. `requireRoles(roles[])`: RBAC check.
 - **`middleware/apiKey.ts`** — `requireApiKey`: reads `X-API-Key` header, compares to `env.SCRAPER_API_KEY` using `crypto.timingSafeEqual`. Returns 503 if key not configured, 401 if wrong.
 - **`middleware/audit.ts`** — Logs to `AuditLog` only on 2xx responses. Captures `resourceId` from `req.params.id`.
-- **`config/env.ts`** — Zod-parsed env. Always import `env` from here — never use `process.env` directly in routes. Exports `SMTP_USER`, `SMTP_PASS`, `FRONTEND_URL`, `SCRAPER_API_KEY`, `INGEST_RATE_LIMIT_RPM`, `ANTHROPIC_API_KEY`.
+- **`config/env.ts`** — Zod-parsed env. Always import `env` from here — never use `process.env` directly in routes. Exports `SMTP_USER`, `SMTP_PASS`, `FRONTEND_URL`, `SCRAPER_API_KEY`, `INGEST_RATE_LIMIT_RPM`, `OPENAI_API_KEY`.
 
 ### Auth flow (2FA)
 - `POST /auth/login`: verify password → if `mustSetPassword`, return `requiresPasswordSetup: true` → if `mfaEnabled: false` (seed users), issue tokens directly → if `mfaEnabled: true` (new users), generate bcrypt-hashed OTP, store with 10-min expiry, email user, return `requiresOtp: true`.
@@ -154,7 +160,7 @@ app/
 1. Fetches all active thresholds.
 2. Fetches distinct county IDs from the last 24 hours **once** (not per threshold).
 3. For each threshold × county: runs aggregate COUNT queries, checks against threshold, deduplicates on `OPEN|ACKNOWLEDGED` status, creates `Alert`, emits `alert:new` via Socket.io, calls `notifyAlertRecipients()` async.
-4. `notifyAlertRecipients()`: fetches recent `SentimentEvent` headlines for the alert's county+topic window, calls `generateAlertSummary()` (Claude Haiku), persists result as `alert.llmSummary`, then emails county officials + national admins with the LLM summary included.
+4. `notifyAlertRecipients()`: fetches recent `SentimentEvent` headlines for the alert's county+topic window, calls `generateAlertSummary()` (OpenAI `gpt-4o-mini`), persists result as `alert.llmSummary`, then emails county officials + national admins with the LLM summary included.
 
 Socket emit is county-scoped: sockets where `socket.data.user.countyId === alert.countyId` or `countyId === null` (national admins/analysts) receive it.
 
@@ -164,7 +170,7 @@ Socket emit is county-scoped: sockets where `socket.data.user.countyId === alert
 - **`config.py`** — Reads `.env`, defines `COUNTY_NAMES` (47) and `TOPIC_NAMES` (12) as Python lists. These must stay in sync with `prisma/seed.ts`.
 - **`dedup.py`** — SQLite-backed URL deduplication. `is_seen(url)` / `mark_seen(url)` / `purge_old(days=30)`. DB path from `DEDUP_DB_PATH` env var.
 - **`ingest_client.py`** — POSTs event batches to `INGEST_URL` with `X-API-Key` header. Chunks at 500 events. Logs full response body on error.
-- **`nlp/sentiment.py`** — Lazy-loaded `cardiffnlp/twitter-roberta-base-sentiment-latest` pipeline. `analyze(text)` returns `{label, score}` where score = `positive_prob - negative_prob` ∈ [-1, 1].
+- **`nlp/sentiment.py`** — Lazy-loaded `cardiffnlp/twitter-xlm-roberta-base-sentiment` pipeline (multilingual, covers English and Swahili). The same model name is baked into `scraper/Dockerfile` via the `SENTIMENT_MODEL` build arg; the two must stay in sync or the image downloads a second model at runtime. `analyze(text)` returns `{label, score}` where score = `positive_prob - negative_prob` ∈ [-1, 1].
 - **`nlp/county_detector.py`** — Regex word-boundary matching against 47 county names + aliases. Returns first matched canonical name or `None`.
 - **`nlp/topic_detector.py`** — Keyword matching for 12 topics. Returns a list — one article can match multiple topics, producing one `SentimentEvent` per `(county, topic)` pair.
 - **`scrapers/rss_feeds.py`** — feedparser + requests/BeautifulSoup for Nation Africa, Standard Media, Citizen TV, KBC RSS feeds.
@@ -177,7 +183,7 @@ Timestamps sent to the backend must use `strftime("%Y-%m-%dT%H:%M:%SZ")` format 
 
 ### Data model invariants
 - `SentimentEvent` must never store PII (no names, IDs, phone numbers). The `headline` and `snippet` fields store public article content sourced from published news — this is acceptable. Never store user-generated free text that could identify individuals.
-- `Alert.llmSummary` is populated asynchronously after alert creation by `notifyAlertRecipients()`; it may be `null` for alerts fired before the LLM feature was deployed or when `ANTHROPIC_API_KEY` is not set.
+- `Alert.llmSummary` is populated asynchronously after alert creation by `notifyAlertRecipients()`; it may be `null` for alerts fired before the LLM feature was deployed or when `OPENAI_API_KEY` is not set.
 - `COUNTY_OFFICIAL` users are always scoped at the API layer via `req.user.countyId` — enforce this in every new route that touches county data.
 - Audit logs are append-only by convention — never delete or update `AuditLog` rows.
 - OTP codes are bcrypt-hashed before storage — never store plaintext codes.
