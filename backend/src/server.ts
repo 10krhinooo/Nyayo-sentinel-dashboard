@@ -80,6 +80,18 @@ const loginLimiter = rateLimit({
   message: { message: "Too many login attempts. Please try again later." }
 });
 
+// OTP verification is the weakest point in the auth flow: a 6-digit code with
+// a 10-minute lifetime is exhaustible in seconds at an unbounded request rate.
+// Previously only /api/auth/login carried a limiter, so /verify-otp and
+// /token/refresh were unlimited.
+const otpLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many verification attempts. Please request a new code." }
+});
+
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 300,
@@ -89,7 +101,13 @@ const apiLimiter = rateLimit({
 });
 
 app.use("/api/auth/login", loginLimiter);
-app.use("/api/auth", authRoutes);
+app.use("/api/auth/verify-otp", otpLimiter);
+app.use("/api/auth/forgot-password", otpLimiter);
+app.use("/api/auth/reset-password", otpLimiter);
+app.use("/api/auth/set-password", otpLimiter);
+// Blanket limiter for the rest of the auth surface, including /token/refresh
+// and /logout, which previously had none.
+app.use("/api/auth", apiLimiter, authRoutes);
 app.use("/api/dashboard", apiLimiter, dashboardRoutes);
 app.use("/api/counties", apiLimiter, countiesRoutes);
 app.use("/api/topics", apiLimiter, topicsRoutes);
