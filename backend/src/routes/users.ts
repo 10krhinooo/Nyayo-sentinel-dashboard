@@ -3,13 +3,13 @@ import { UserRole } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { authenticate, requireRoles } from "../middleware/auth";
+import { requireAuth, requireRoles } from "../middleware/auth";
 import { audit } from "../middleware/audit";
 import { sendInviteEmail } from "../services/email";
 
 const router = Router();
 
-const adminOnly = [authenticate(true), requireRoles([UserRole.NATIONAL_ADMIN])];
+const adminOnly = [requireAuth(), requireRoles([UserRole.NATIONAL_ADMIN])];
 
 const createUserSchema = z.object({
   email: z.string().email(),
@@ -151,6 +151,28 @@ router.patch(
     }
 
     try {
+      const current = await prisma.user.findUnique({
+        where: { id },
+        select: { role: true, countyId: true },
+      });
+      if (!current) {
+        return res.status(404).json({ message: "User not found." });
+      }
+
+      // A county official with no county is not a narrower account, it is a
+      // wider one: every scoping check keyed off `role === COUNTY_OFFICIAL &&
+      // countyId`, so clearing the county silently granted national access.
+      // The create path already required a county; the update path did not.
+      const effectiveRole = role ?? current.role;
+      const effectiveCountyId =
+        resolvedCountyId !== undefined ? resolvedCountyId : current.countyId;
+
+      if (effectiveRole === UserRole.COUNTY_OFFICIAL && !effectiveCountyId) {
+        return res.status(400).json({
+          message: "County officials must be assigned a county.",
+        });
+      }
+
       const user = await prisma.user.update({
         where: { id },
         data: {

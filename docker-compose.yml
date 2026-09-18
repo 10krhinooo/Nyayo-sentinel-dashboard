@@ -4,13 +4,19 @@ services:
     container_name: nyayo-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: nyayo
-      POSTGRES_PASSWORD: nyayo_secure_password
-      POSTGRES_DB: nyayo_sentinel
+      POSTGRES_USER: ${POSTGRES_USER:-nyayo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in a root .env file}
+      POSTGRES_DB: ${POSTGRES_DB:-nyayo_sentinel}
     volumes:
       - nyayo_pgdata:/var/lib/postgresql/data
     ports:
       - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nyayo} -d ${POSTGRES_DB:-nyayo_sentinel}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   backend:
     build:
@@ -21,10 +27,14 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      DATABASE_URL: postgres://nyayo:nyayo_secure_password@postgres:5432/nyayo_sentinel
+      # Supplied from the root .env rather than assembled here, so no
+      # credential-shaped string lives in a tracked file. Inside the compose
+      # network the database host is the service name, `postgres`.
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in a root .env file}
       NODE_ENV: production
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     ports:
       - "4000:4000"
 
@@ -33,13 +43,14 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:4000
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:4000}
     container_name: nyayo-frontend
     restart: unless-stopped
     environment:
       NODE_ENV: production
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "3000:3000"
 
@@ -53,14 +64,15 @@ services:
       - ./scraper/.env
     environment:
       INGEST_URL: http://backend:4000/api/ingest/events
+      DEDUP_DB_PATH: /data/scraper_dedup.db
     volumes:
       - nyayo_scraper_data:/data
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   nyayo_pgdata:
     driver: local
   nyayo_scraper_data:
     driver: local
-

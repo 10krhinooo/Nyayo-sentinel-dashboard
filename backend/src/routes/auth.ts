@@ -6,7 +6,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { env } from "../config/env";
 import { audit } from "../middleware/audit";
-import { authenticate } from "../middleware/auth";
+import { authenticateOptional } from "../middleware/auth";
 import {
   sendOtpEmail,
   sendWelcomeEmail,
@@ -293,7 +293,7 @@ router.post("/token/refresh", audit("TOKEN_REFRESH", "USER"), async (req, res) =
   }
 });
 
-router.post("/logout", authenticate(true), audit("LOGOUT", "USER"), async (_req, res) => {
+router.post("/logout", authenticateOptional(), audit("LOGOUT", "USER"), async (_req, res) => {
   res.clearCookie("nyayo_access_token");
   res.clearCookie("nyayo_refresh_token");
   return res.status(204).send();

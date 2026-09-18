@@ -13,7 +13,7 @@ Kenyan News / Reddit / Facebook / Instagram → Python Scraper (NLP) → POST /a
 Browser → Next.js Frontend (3000) → Express Backend (4000) → PostgreSQL (5432)
                                            ↕ Socket.io (real-time alerts)
                                            ↕ Gmail SMTP (email notifications)
-                                           ↕ Anthropic Claude API (AI alert summaries)
+                                           ↕ OpenAI API (AI alert summaries)
 ```
 
 | Layer | Technology |
@@ -24,7 +24,7 @@ Browser → Next.js Frontend (3000) → Express Backend (4000) → PostgreSQL (5
 | Auth | JWT (access 15 min / refresh 7 days, httpOnly cookies), Email OTP 2FA |
 | Email | Gmail SMTP via Nodemailer (invite, 2FA OTP, alerts, password reset) |
 | Scraper | Python 3.12, HuggingFace Transformers, feedparser, requests, instaloader, facebook-scraper |
-| AI Summaries | Anthropic Claude Haiku — plain-English alert summaries generated at alert-fire time |
+| AI Summaries | OpenAI `gpt-4o-mini` — plain-English alert summaries generated at alert-fire time |
 | Deployment | Docker + Docker Compose |
 
 ---
@@ -53,7 +53,7 @@ SMTP_PASS=your-gmail-app-password
 FRONTEND_URL=http://localhost:3000
 SCRAPER_API_KEY=<random-string-min-32-chars>
 INGEST_RATE_LIMIT_RPM=10
-ANTHROPIC_API_KEY=<sk-ant-...>   # optional — enables AI-generated alert summaries
+OPENAI_API_KEY=<sk-...>          # optional — enables AI-generated alert summaries
 ```
 
 > **Gmail App Password**: In your Google account go to Security → 2-Step Verification → App passwords. Use the 16-character password generated there as `SMTP_PASS`. Do **not** use your normal Gmail password.
@@ -173,8 +173,8 @@ All seed accounts use password **`Nyayo2024!`** and log in **without** email OTP
 
 ### Early Warning Alerts
 - Real-time alerts pushed over Socket.io (scoped to user's county)
-- **Email notification** — county officials and national admins are emailed whenever a new alert fires; includes an "AI Analysis" block when `ANTHROPIC_API_KEY` is configured
-- **AI-generated summaries** — Claude Haiku reads recent article headlines for the triggered county/topic and writes a 2–3 sentence plain-English explanation; stored on the `Alert` record and shown in the detail drawer
+- **Email notification** — county officials and national admins are emailed whenever a new alert fires; includes an "AI Analysis" block when `OPENAI_API_KEY` is configured
+- **AI-generated summaries** — OpenAI `gpt-4o-mini` reads recent article headlines for the triggered county/topic and writes a 2–3 sentence plain-English explanation; stored on the `Alert` record and shown in the detail drawer
 - Acknowledge and Resolve buttons with optimistic UI updates
 - Pagination (20 per page)
 - Two trigger types: `THRESHOLD` (negative %) and `SPIKE` (volume factor)
@@ -191,7 +191,7 @@ All seed accounts use password **`Nyayo2024!`** and log in **without** email OTP
 
 ### Automated Sentiment Ingestion (Scraper)
 - Python scraper service pulls from Kenyan RSS feeds (Nation Africa, Standard Media, Citizen TV, KBC), Reddit r/Kenya, 7 Kenyan Facebook pages, and Instagram (`nairobi_gossip_club`) every 60 minutes
-- Sentiment classified by `cardiffnlp/twitter-roberta-base-sentiment-latest` — outputs POSITIVE / NEUTRAL / NEGATIVE with a score in [-1, 1]
+- Sentiment classified by `cardiffnlp/twitter-xlm-roberta-base-sentiment` — outputs POSITIVE / NEUTRAL / NEGATIVE with a score in [-1, 1]
 - County detected via keyword matching against all 47 county names + aliases (e.g. "Eldoret" → Uasin Gishu)
 - Topic detected via keyword matching against all 12 topics — one article can produce multiple events
 - Each event carries the article `headline` (max 220 chars) and `snippet` (max 500 chars) for downstream LLM summarisation
@@ -298,7 +298,7 @@ nyayo-sentinel-dashboard/
 │   │   │   └── reports.ts
 │   │   ├── services/
 │   │   │   ├── email.ts      # Nodemailer Gmail — all email send functions
-│   │   │   └── llm.ts        # Anthropic Claude Haiku — generateAlertSummary()
+│   │   │   └── llm.ts        # OpenAI gpt-4o-mini — generateAlertSummary()
 │   │   ├── middleware/
 │   │   │   ├── auth.ts       # JWT verification + RBAC
 │   │   │   ├── apiKey.ts     # API key auth for scraper ingest endpoint

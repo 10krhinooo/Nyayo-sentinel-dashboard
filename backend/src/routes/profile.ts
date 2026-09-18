@@ -2,14 +2,14 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { authenticate } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
 import { audit } from "../middleware/audit";
 import { sendPasswordChangedEmail } from "../services/email";
 
 const router = Router();
 
 // GET /profile
-router.get("/", authenticate(), async (req, res) => {
+router.get("/", requireAuth(), async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user!.id },
@@ -39,7 +39,7 @@ const updateProfileSchema = z.object({
 });
 
 // PATCH /profile
-router.patch("/", authenticate(), audit("UPDATE_PROFILE", "USER"), async (req, res) => {
+router.patch("/", requireAuth(), audit("UPDATE_PROFILE", "USER"), async (req, res) => {
   try {
     const parsed = updateProfileSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -66,7 +66,7 @@ const changePasswordSchema = z.object({
 });
 
 // POST /profile/change-password
-router.post("/change-password", authenticate(), audit("CHANGE_PASSWORD", "USER"), async (req, res) => {
+router.post("/change-password", requireAuth(), audit("CHANGE_PASSWORD", "USER"), async (req, res) => {
   try {
     const parsed = changePasswordSchema.safeParse(req.body);
     if (!parsed.success) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 
@@ -9,7 +9,9 @@ vi.mock("../../config/env", () => ({
 }));
 
 // Import after mock is registered
-const { authenticate, requireRoles } = await import("../../middleware/auth");
+const { requireAuth, authenticateOptional, requireRoles } = await import(
+  "../../middleware/auth"
+);
 
 function makeReq(overrides: Record<string, unknown> = {}): Request {
   return { headers: {}, cookies: {}, ...overrides } as unknown as Request;
@@ -26,13 +28,13 @@ function signToken(payload: object, expiresIn: string | number = "1h"): string {
   return jwt.sign(payload, TEST_SECRET, { expiresIn } as jwt.SignOptions);
 }
 
-describe("authenticate middleware", () => {
+describe("requireAuth middleware", () => {
   it("returns 401 when no token is present", () => {
     const req = makeReq();
     const res = makeRes();
     const next = vi.fn() as unknown as NextFunction;
 
-    authenticate()(req, res, next);
+    requireAuth()(req, res, next);
 
     expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
@@ -44,7 +46,7 @@ describe("authenticate middleware", () => {
     const res = makeRes();
     const next = vi.fn() as unknown as NextFunction;
 
-    authenticate()(req, res, next);
+    requireAuth()(req, res, next);
 
     expect(next).toHaveBeenCalled();
     expect((req as unknown as { user: { id: string } }).user).toMatchObject({
@@ -59,7 +61,7 @@ describe("authenticate middleware", () => {
     const res = makeRes();
     const next = vi.fn() as unknown as NextFunction;
 
-    authenticate()(req, res, next);
+    requireAuth()(req, res, next);
 
     expect(next).toHaveBeenCalled();
     expect((req as unknown as { user: { id: string } }).user).toMatchObject({
@@ -74,7 +76,7 @@ describe("authenticate middleware", () => {
     const res = makeRes();
     const next = vi.fn() as unknown as NextFunction;
 
-    authenticate()(req, res, next);
+    requireAuth()(req, res, next);
 
     expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
@@ -86,7 +88,7 @@ describe("authenticate middleware", () => {
     const res = makeRes();
     const next = vi.fn() as unknown as NextFunction;
 
-    authenticate()(req, res, next);
+    requireAuth()(req, res, next);
 
     expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
@@ -97,7 +99,7 @@ describe("authenticate middleware", () => {
     const res = makeRes();
     const next = vi.fn() as unknown as NextFunction;
 
-    authenticate(true)(req, res, next);
+    authenticateOptional()(req, res, next);
 
     expect(next).toHaveBeenCalled();
     expect((req as unknown as { user?: unknown }).user).toBeUndefined();
@@ -108,7 +110,7 @@ describe("authenticate middleware", () => {
     const res = makeRes();
     const next = vi.fn() as unknown as NextFunction;
 
-    authenticate(true)(req, res, next);
+    authenticateOptional()(req, res, next);
 
     expect(next).toHaveBeenCalled();
     expect((req as unknown as { user?: unknown }).user).toBeUndefined();
@@ -149,5 +151,25 @@ describe("requireRoles middleware", () => {
 
     expect(next).toHaveBeenCalled();
     expect((res.status as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+  });
+});
+
+describe("the optional-auth footgun cannot be reintroduced", () => {
+  it("requireAuth takes no arguments, so requireAuth(true) cannot select optional mode", () => {
+    // The old signature was authenticate(optional = false), which made the
+    // unsafe mode reachable by passing a single truthy argument. Any stray
+    // argument is now ignored and the request is still rejected.
+    const req = makeReq();
+    const res = makeRes();
+    const next = vi.fn() as unknown as NextFunction;
+
+    (requireAuth as unknown as (o?: unknown) => ReturnType<typeof requireAuth>)(true)(
+      req,
+      res,
+      next
+    );
+
+    expect((res.status as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
   });
 });

@@ -1,40 +1,48 @@
 import { Router } from "express";
-import { UserRole } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import { authenticate } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { resolveScope, canAccessCounty } from "../middleware/scope";
 import { audit } from "../middleware/audit";
 
 const router = Router();
 
+interface HeatmapRow {
+  county_id: string;
+  avg_score: number;
+  negative_ratio: number;
+  volume: bigint;
+}
+
 router.get(
   "/heatmap",
-  authenticate(true),
+  requireAuth(),
+  resolveScope(),
   audit("VIEW_HEATMAP", "SENTIMENT"),
   async (req, res) => {
     try {
-      const results = await prisma.$queryRaw<
-        { county_id: string; avg_score: number; negative_ratio: number; volume: number }[]
-      >`SELECT
+      const scopedCountyId = req.scope!.countyId;
+
+      // Scoped in SQL rather than by filtering the full result set in JS, which
+      // previously aggregated all 47 counties and then discarded 46 of them.
+      const results = await prisma.$queryRaw<HeatmapRow[]>`
+        SELECT
           "countyId" as county_id,
           AVG("sentimentScore") as avg_score,
           AVG(CASE WHEN "sentimentLabel" = 'NEGATIVE' THEN 1 ELSE 0 END) as negative_ratio,
           COUNT(*) as volume
         FROM "SentimentEvent"
+        WHERE (${scopedCountyId}::text IS NULL OR "countyId" = ${scopedCountyId})
         GROUP BY "countyId"`;
 
-      const scopedResults =
-        req.user?.role === UserRole.COUNTY_OFFICIAL && req.user.countyId
-          ? results.filter((r) => r.county_id === req.user?.countyId)
-          : results;
-
-      const countyIds = scopedResults.map((r) => r.county_id);
+      const countyIds = results.map((r) => r.county_id);
       const counties = await prisma.county.findMany({
         where: { id: { in: countyIds } }
       });
 
-      const data = scopedResults.map((r) => ({
+      const data = results.map((r) => ({
         countyId: r.county_id,
         countyName: counties.find((c) => c.id === r.county_id)?.name ?? "Unknown",
+        countyCode: counties.find((c) => c.id === r.county_id)?.code ?? null,
         avgScore: Number(r.avg_score),
         negativeRatio: Number(r.negative_ratio),
         volume: Number(r.volume)
@@ -50,16 +58,13 @@ router.get(
 // GET /counties/:countyId/constituencies/heatmap
 router.get(
   "/:countyId/constituencies/heatmap",
-  authenticate(true),
+  requireAuth(),
+  resolveScope(),
   audit("VIEW_CONSTITUENCY_HEATMAP", "SENTIMENT"),
   async (req, res) => {
     const { countyId } = req.params;
 
-    // County officials can only view their own county
-    if (
-      req.user?.role === UserRole.COUNTY_OFFICIAL &&
-      req.user.countyId !== countyId
-    ) {
+    if (!canAccessCounty(req, countyId)) {
       return res.status(403).json({ message: "Access denied" });
     }
 
@@ -100,15 +105,13 @@ router.get(
 // GET /counties/:countyId/subcounties/heatmap
 router.get(
   "/:countyId/subcounties/heatmap",
-  authenticate(true),
+  requireAuth(),
+  resolveScope(),
   audit("VIEW_SUBCOUNTY_HEATMAP", "SENTIMENT"),
   async (req, res) => {
     const { countyId } = req.params;
 
-    if (
-      req.user?.role === UserRole.COUNTY_OFFICIAL &&
-      req.user.countyId !== countyId
-    ) {
+    if (!canAccessCounty(req, countyId)) {
       return res.status(403).json({ message: "Access denied" });
     }
 

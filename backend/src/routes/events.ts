@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { SentimentLabel, UserRole, Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import { authenticate } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
+import { resolveScope } from "../middleware/scope";
 import { audit } from "../middleware/audit";
 
 const router = Router();
@@ -10,7 +11,8 @@ const PAGE_LIMIT = 50;
 
 router.get(
   "/",
-  authenticate(),
+  requireAuth(),
+  resolveScope(),
   audit("VIEW_EVENTS", "SENTIMENT"),
   async (req, res) => {
     try {

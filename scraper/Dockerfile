@@ -2,22 +2,29 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install CPU-only PyTorch first — large layer, cache it separately
-RUN pip install --no-cache-dir \
-    torch==2.3.1+cpu \
-    --index-url https://download.pytorch.org/whl/cpu
+# Install ML dependencies first — large layer, cache it separately
+COPY requirements-ml.txt .
+RUN pip install --no-cache-dir -r requirements-ml.txt
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Bake model weights into the image so the container starts instantly
+# Bake model weights into the image so the container starts instantly and can
+# run without outbound internet. MUST match nlp/sentiment.py MODEL_NAME.
+ARG SENTIMENT_MODEL=cardiffnlp/twitter-xlm-roberta-base-sentiment
+ENV SENTIMENT_MODEL=$SENTIMENT_MODEL
 RUN python -c "\
+import os; \
 from transformers import pipeline; \
-pipeline('sentiment-analysis', \
-model='cardiffnlp/twitter-roberta-base-sentiment-latest', \
-top_k=None)"
+pipeline('sentiment-analysis', model=os.environ['SENTIMENT_MODEL'], top_k=None)"
 
 COPY . .
+
+# Run as an unprivileged user rather than root.
+RUN useradd --create-home --uid 10001 scraper \
+    && mkdir -p /data \
+    && chown -R scraper:scraper /app /data
+USER scraper
 
 VOLUME ["/data"]
 

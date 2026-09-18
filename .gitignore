@@ -32,8 +32,11 @@ pnpm-debug.log*
 # Environment variables
 # =========================
 frontend/.env*
+!frontend/.env.example
 backend/.env*
+!backend/.env.example
 .env*
+!.env.example
 
 # =========================
 # Prisma (if backend uses it)

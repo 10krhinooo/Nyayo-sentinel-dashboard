@@ -2,7 +2,16 @@ import { Router } from "express";
 import { z } from "zod";
 import { AlertSeverity, AlertStatus, MetricType, TriggerType, UserRole, Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import { authenticate, requireRoles } from "../middleware/auth";
+import { requireAuth, requireRoles } from "../middleware/auth";
+import { resolveScope, countyWhere, canAccessCounty } from "../middleware/scope";
+
+/**
+ * National roles see every county's alerts. Membership is decided by role
+ * rather than by a null countyId, which a county official can also have.
+ */
+function isNationalRole(role: UserRole | undefined): boolean {
+  return role === UserRole.NATIONAL_ADMIN || role === UserRole.ANALYST;
+}
 import { audit } from "../middleware/audit";
 import { sendAlertEmail } from "../services/email";
 import { generateAlertSummary } from "../services/llm";
@@ -14,7 +23,8 @@ const PAGE_LIMIT = 20;
 
 router.get(
   "/",
-  authenticate(true),
+  requireAuth(),
+  resolveScope(),
   audit("VIEW_ALERTS", "ALERT"),
   async (req, res) => {
     try {
@@ -30,10 +40,7 @@ router.get(
       const validStatuses = Object.values(AlertStatus) as string[];
       const statusFilter = validStatuses.includes(statusQ) ? (statusQ as AlertStatus) : undefined;
 
-      const where: Prisma.AlertWhereInput = {};
-      if (req.user?.role === UserRole.COUNTY_OFFICIAL && req.user.countyId) {
-        where.countyId = req.user.countyId;
-      }
+      const where: Prisma.AlertWhereInput = { ...countyWhere(req) };
       if (statusFilter) where.status = statusFilter;
       if (startDate || endDate) {
         where.triggeredAt = {};
@@ -72,7 +79,7 @@ router.get(
 
 router.get(
   "/thresholds",
-  authenticate(),
+  requireAuth(),
   requireRoles([UserRole.NATIONAL_ADMIN]),
   audit("VIEW_ALERT_THRESHOLDS", "ALERT_THRESHOLD"),
   async (req, res) => {
@@ -114,7 +121,7 @@ const thresholdSchema = z.object({
 
 router.post(
   "/thresholds",
-  authenticate(),
+  requireAuth(),
   requireRoles([UserRole.NATIONAL_ADMIN]),
   audit("UPDATE_ALERT_THRESHOLDS", "ALERT_THRESHOLD"),
   async (req, res) => {
@@ -149,7 +156,8 @@ const statusSchema = z.object({
 
 router.patch(
   "/:id/status",
-  authenticate(),
+  requireAuth(),
+  resolveScope(),
   audit("UPDATE_ALERT_STATUS", "ALERT"),
   async (req, res) => {
     try {
@@ -159,6 +167,21 @@ router.patch(
       }
 
       const { id } = req.params;
+
+      // Previously a blind update by id with no ownership check, so any
+      // authenticated county official could acknowledge or resolve an alert
+      // belonging to any other county.
+      const existing = await prisma.alert.findUnique({
+        where: { id },
+        select: { id: true, countyId: true }
+      });
+      if (!existing) {
+        return res.status(404).json({ message: "Alert not found" });
+      }
+      if (!canAccessCounty(req, existing.countyId)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
       const alert = await prisma.alert.update({
         where: { id },
         data: { status: parsed.data.status }
@@ -172,7 +195,8 @@ router.patch(
 
 router.get(
   "/:id/details",
-  authenticate(),
+  requireAuth(),
+  resolveScope(),
   audit("VIEW_ALERT_DETAILS", "ALERT"),
   async (req, res) => {
     try {
@@ -182,7 +206,7 @@ router.get(
       });
       if (!alert) return res.status(404).json({ message: "Alert not found" });
 
-      if (req.user?.role === UserRole.COUNTY_OFFICIAL && req.user.countyId && alert.countyId !== req.user.countyId) {
+      if (!canAccessCounty(req, alert.countyId)) {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -303,9 +327,11 @@ export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
 
         if (io) {
           io.sockets.sockets.forEach((socket) => {
-            const socketUser = socket.data.user as { countyId?: string | null } | undefined;
+            const socketUser = socket.data.user as
+              | { role?: UserRole; countyId?: string | null }
+              | undefined;
             if (!socketUser) return;
-            if (socketUser.countyId == null || socketUser.countyId === countyId) {
+            if (isNationalRole(socketUser.role) || socketUser.countyId === countyId) {
               socket.emit("alert:new", alert);
             }
           });
@@ -381,9 +407,11 @@ export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
 
         if (io) {
           io.sockets.sockets.forEach((socket) => {
-            const socketUser = socket.data.user as { countyId?: string | null } | undefined;
+            const socketUser = socket.data.user as
+              | { role?: UserRole; countyId?: string | null }
+              | undefined;
             if (!socketUser) return;
-            if (socketUser.countyId == null || socketUser.countyId === countyId) {
+            if (isNationalRole(socketUser.role) || socketUser.countyId === countyId) {
               socket.emit("alert:new", alert);
             }
           });
