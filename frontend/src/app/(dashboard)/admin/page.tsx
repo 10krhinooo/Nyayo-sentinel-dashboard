@@ -383,7 +383,7 @@ function UsersTab() {
                   </tr>
                 ))}
                 {users.length === 0 && (
-                  <tr><td colSpan={6} style={{ color: "var(--color-muted)", textAlign: "center" }}>No users found. Use "+ Add User" to invite someone.</td></tr>
+                  <tr><td colSpan={6} style={{ color: "var(--color-muted)", textAlign: "center" }}>No users found. Use &quot;+ Add User&quot; to invite someone.</td></tr>
                 )}
               </tbody>
             </table>

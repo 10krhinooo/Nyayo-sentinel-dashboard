@@ -13,7 +13,7 @@ flowchart LR
         H[Sentiment and Analytics - Aggregation Services]
         I[Alert Engine - Threshold and Spike Detection]
         J[Audit Logger]
-        LLM[LLM Service - Claude Haiku Alert Summaries]
+        LLM[LLM Service - OpenAI gpt-4o-mini Alert Summaries]
     end
 
     subgraph DB[PostgreSQL Encrypted]
@@ -27,7 +27,7 @@ flowchart LR
     subgraph Integrations[Secure Integrations]
         P[Email Gateway - Gmail SMTP]
         Q[External Data Pipelines - RSS / Reddit / Facebook / Instagram]
-        R[Anthropic Claude API]
+        R[OpenAI API]
     end
 
     A <--> B

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { getUser, setUser, clearUser, type AuthUser } from "../../lib/auth";
 
 const SAMPLE_USER: AuthUser = {

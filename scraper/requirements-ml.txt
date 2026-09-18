@@ -1,0 +1,17 @@
+# Machine-learning dependencies, split out from requirements.txt so that CI and
+# the unit tests (which do not exercise nlp/sentiment.py) install in seconds
+# instead of pulling ~800MB of PyTorch.
+#
+# torch was previously undeclared anywhere in the repo: requirements.txt listed
+# transformers and nlp/sentiment.py builds a sentiment-analysis pipeline, but
+# the only thing that installed a backend was a RUN line in the Dockerfile.
+#
+# Install with:
+#   pip install -r requirements-ml.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.3.1+cpu
+transformers==4.41.2
+sentencepiece==0.2.0
+protobuf>=4.0.0

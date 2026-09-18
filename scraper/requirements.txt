@@ -7,9 +7,8 @@ facebook-scraper==0.2.59
 instaloader==4.13.1
 langdetect==1.0.9
 
-transformers==4.41.2
-sentencepiece==0.2.0
-protobuf>=4.0.0
+# ML dependencies (torch, transformers) live in requirements-ml.txt so that
+# test and lint environments stay lightweight. The scraper needs both files.
 
 schedule==1.2.2
 python-dotenv==1.0.1
