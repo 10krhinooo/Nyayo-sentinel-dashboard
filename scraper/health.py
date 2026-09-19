@@ -1,12 +1,19 @@
 """Per-scraper health tracking. In-memory; written to health.json after each cycle."""
 import json
+import os
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_HEALTH_FILE = Path("scraper_health.json")
+_HEALTH_FILE = Path(
+    os.environ.get("HEALTH_FILE_PATH")
+    # Default alongside the dedup database, which already lives on the mounted
+    # volume. Writing to the working directory meant the file disappeared with
+    # the container and nothing could read it.
+    or str(Path(os.environ.get("DEDUP_DB_PATH", "/data/scraper_dedup.db")).parent / "scraper_health.json")
+)
 
 _state: dict[str, dict] = {}
 
