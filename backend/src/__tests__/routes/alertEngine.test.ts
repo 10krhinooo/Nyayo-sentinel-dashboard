@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../../config/env", () => ({
-  env: { OPENAI_API_KEY: undefined, NODE_ENV: "test" },
+  env: { OPENAI_API_KEY: undefined, NODE_ENV: "test", LOG_LEVEL: "silent" },
 }));
 
 vi.mock("../../services/llm", () => ({

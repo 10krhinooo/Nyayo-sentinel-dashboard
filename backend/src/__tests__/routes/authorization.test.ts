@@ -8,6 +8,7 @@ const SECRET = "test-access-secret";
 
 vi.mock("../../config/env", () => ({
   env: {
+    LOG_LEVEL: "silent",
     JWT_ACCESS_TOKEN_SECRET: SECRET,
     JWT_REFRESH_TOKEN_SECRET: "test-refresh-secret",
     NODE_ENV: "test",

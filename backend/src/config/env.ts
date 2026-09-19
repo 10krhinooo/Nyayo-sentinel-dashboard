@@ -20,6 +20,9 @@ const envSchema = z.object({
   JWT_REFRESH_TOKEN_TTL: z.string().default("604800"),
 
   ALLOWED_ORIGINS: z.string().default("http://localhost:3000"),
+  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
+  /// Seconds to let in-flight requests finish during shutdown.
+  SHUTDOWN_TIMEOUT_MS: z.string().default("15000"),
   MFA_ISSUER: z.string().default("NyayoSentinel"),
 
   NOTIFY_EMAIL_FROM: z.string().optional(),
@@ -57,6 +60,7 @@ export const env = {
   port: Number(parsed.data.PORT),
   accessTokenTtlSeconds: Number(parsed.data.JWT_ACCESS_TOKEN_TTL),
   refreshTokenTtlSeconds: Number(parsed.data.JWT_REFRESH_TOKEN_TTL),
-  allowedOrigins: parsed.data.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+  allowedOrigins: parsed.data.ALLOWED_ORIGINS.split(",").map((o) => o.trim()),
+  shutdownTimeoutMs: Number(parsed.data.SHUTDOWN_TIMEOUT_MS)
 };
 

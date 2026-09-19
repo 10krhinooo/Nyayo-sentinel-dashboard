@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma";
+import { logger } from "../lib/logger";
 import { requireAuth } from "../middleware/auth";
 import { resolveScope, canAccessCounty } from "../middleware/scope";
 import { audit } from "../middleware/audit";
@@ -49,7 +50,8 @@ router.get(
       }));
 
       return res.json({ counties: data });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -96,7 +98,8 @@ router.get(
       }));
 
       return res.json({ constituencies: data });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -143,7 +146,8 @@ router.get(
       }));
 
       return res.json({ subcounties: data });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }

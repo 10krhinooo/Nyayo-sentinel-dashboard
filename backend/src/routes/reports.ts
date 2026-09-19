@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { UserRole } from "@prisma/client";
 import { prisma } from "../lib/prisma";
+import { logger } from "../lib/logger";
 import { requireAuth, requireRoles } from "../middleware/auth";
 import { resolveScope, countyWhere } from "../middleware/scope";
 import { audit } from "../middleware/audit";
@@ -47,7 +48,8 @@ router.get(
         rows.push(`${csvCell(row.sentimentLabel)},${row._count._all}`);
       }
       return res.send(rows.join("\n"));
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -79,7 +81,8 @@ router.get(
       }
 
       return res.send(rows.join("\n"));
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }

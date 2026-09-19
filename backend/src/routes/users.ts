@@ -2,6 +2,7 @@ import { Router } from "express";
 import { UserRole } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { logger } from "../lib/logger";
 import { issueToken } from "../lib/tokens";
 import { requireAuth, requireRoles } from "../middleware/auth";
 import { audit } from "../middleware/audit";
@@ -54,7 +55,8 @@ router.get(
         prisma.user.count(),
       ]);
       return res.json({ users, total, page, limit });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -114,7 +116,8 @@ router.post(
       await sendInviteEmail(email, inviteToken);
 
       return res.status(201).json({ user, invited: true });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -184,8 +187,14 @@ router.patch(
         select: { id: true, email: true, role: true, countyId: true, county: { select: { name: true } } },
       });
       return res.json({ user });
-    } catch {
-      return res.status(404).json({ message: "User not found." });
+    } catch (err) {
+      // P2025 is Prisma's "record required but not found". Anything
+      // else is a real failure and must not be reported as a 404.
+      if ((err as { code?: string })?.code === "P2025") {
+        return res.status(404).json({ message: "User not found." });
+      }
+      logger.error({ err }, "User handler failed");
+      return res.status(500).json({ message: "Internal server error" });
     }
   }
 );
@@ -205,8 +214,14 @@ router.delete(
     try {
       await prisma.user.delete({ where: { id } });
       return res.status(204).send();
-    } catch {
-      return res.status(404).json({ message: "User not found." });
+    } catch (err) {
+      // P2025 is Prisma's "record required but not found". Anything
+      // else is a real failure and must not be reported as a 404.
+      if ((err as { code?: string })?.code === "P2025") {
+        return res.status(404).json({ message: "User not found." });
+      }
+      logger.error({ err }, "User handler failed");
+      return res.status(500).json({ message: "Internal server error" });
     }
   }
 );

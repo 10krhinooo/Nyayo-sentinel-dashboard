@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { SentimentLabel, UserRole, Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
+import { logger } from "../lib/logger";
 import { requireAuth } from "../middleware/auth";
 import { resolveScope } from "../middleware/scope";
 import { audit } from "../middleware/audit";
@@ -82,7 +83,8 @@ router.get(
       ]);
 
       return res.json({ events, total, page, limit });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }
