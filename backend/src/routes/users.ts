@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { UserRole } from "@prisma/client";
-import { randomUUID } from "crypto";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { issueToken } from "../lib/tokens";
 import { requireAuth, requireRoles } from "../middleware/auth";
 import { audit } from "../middleware/audit";
 import { sendInviteEmail } from "../services/email";
@@ -91,7 +91,9 @@ router.post(
       return res.status(201).json({ invited: true });
     }
 
-    const inviteToken = randomUUID();
+    // Only the hash is persisted; the plaintext goes out by email and is
+    // never written to the database.
+    const { token: inviteToken, hash: inviteTokenHash } = issueToken();
     const inviteTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
     try {
@@ -103,7 +105,7 @@ router.post(
           countyId: resolvedCountyId,
           mfaEnabled: true,
           mustSetPassword: true,
-          inviteToken,
+          inviteTokenHash,
           inviteTokenExpiry
         },
         select: { id: true, email: true, role: true, countyId: true, createdAt: true },

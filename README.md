@@ -42,8 +42,9 @@ Create `backend/.env`:
 DATABASE_URL=postgres://nyayo:nyayo_secure_password@localhost:5432/nyayo_sentinel
 NODE_ENV=development
 PORT=4000
-JWT_ACCESS_TOKEN_SECRET=change-me-in-production
-JWT_REFRESH_TOKEN_SECRET=change-me-in-production
+JWT_ACCESS_TOKEN_SECRET=<min 32 chars>
+JWT_REFRESH_TOKEN_SECRET=<min 32 chars, different from the access secret>
+CSRF_SECRET=<min 32 chars, different from both JWT secrets>
 JWT_ACCESS_TOKEN_TTL=900
 JWT_REFRESH_TOKEN_TTL=604800
 ALLOWED_ORIGINS=http://localhost:3000

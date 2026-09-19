@@ -19,10 +19,15 @@ model User {
   mfaSecret         String?
   otpCode           String?
   otpExpiry         DateTime?
-  inviteToken       String?
+  otpAttempts       Int       @default(0)
+  // Invite and reset tokens are stored as SHA-256 hashes, never in the clear:
+  // a database read would otherwise be enough to take over any account. They
+  // are high-entropy UUIDs, so a fast hash is appropriate and keeps the lookup
+  // a single indexed equality match.
+  inviteTokenHash   String?   @unique
   inviteTokenExpiry DateTime?
   mustSetPassword   Boolean   @default(false)
-  resetToken        String?
+  resetTokenHash    String?   @unique
   resetTokenExpiry  DateTime?
   lastLoginAt       DateTime?
   createdAt         DateTime  @default(now())
@@ -30,6 +35,23 @@ model User {
 
   county            County?   @relation(fields: [countyId], references: [id])
   auditLogs         AuditLog[]
+  revokedTokens     RevokedToken[]
+}
+
+/// Denylist for refresh tokens that have been rotated or explicitly logged out.
+/// Refresh tokens were previously stateless and unrevocable: logout only
+/// cleared cookies, so a stolen token stayed valid for its full 7 day life.
+model RevokedToken {
+  id        String   @id @default(cuid())
+  jti       String   @unique
+  userId    String
+  expiresAt DateTime
+  revokedAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([userId])
 }
 
 enum UserRole {

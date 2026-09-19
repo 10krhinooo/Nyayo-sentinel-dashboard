@@ -35,7 +35,7 @@ app.use(express.json());
 app.use(cookieParser());
 
 const { generateCsrfToken, doubleCsrfProtection } = doubleCsrf({
-  getSecret: () => env.JWT_ACCESS_TOKEN_SECRET,
+  getSecret: () => env.CSRF_SECRET,
   // Use cookie user ID as session identifier, fall back to IP for unauthenticated
   getSessionIdentifier: (req) => {
     try {
