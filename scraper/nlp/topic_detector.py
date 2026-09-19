@@ -1,3 +1,5 @@
+import re
+
 _TOPIC_KEYWORDS: dict[str, list[str]] = {
     "Healthcare": [
         "hospital", "health", "clinic", "doctor", "nurse", "medicine",
@@ -98,19 +100,62 @@ _TOPIC_KEYWORDS: dict[str, list[str]] = {
 }
 
 
+def _compile_patterns() -> dict[str, re.Pattern[str]]:
+    """Compile one word-boundary alternation per topic.
+
+    Plain substring matching produced false positives that were invisible in
+    aggregate: "sha" (Healthcare) matched "share" and "Mombasa shamba", "kra"
+    (Taxation) matched "Ankara", and "ward" (Devolution) matched "award",
+    "towards" and "forward". Every article containing those common words was
+    attributed to a topic it never mentioned.
+    """
+    patterns: dict[str, re.Pattern[str]] = {}
+    for topic, keywords in _TOPIC_KEYWORDS.items():
+        # Longest first so "affordable housing" wins over "housing" when both
+        # are present, which keeps the strong-keyword count honest.
+        ordered = sorted(set(keywords), key=len, reverse=True)
+        alternation = "|".join(re.escape(kw) for kw in ordered)
+        patterns[topic] = re.compile(rf"\b(?:{alternation})\b", re.IGNORECASE)
+    return patterns
+
+
+_PATTERNS = _compile_patterns()
+
+# A keyword is "strong" when it identifies the topic on its own. Length was
+# previously used as a proxy for specificity, which handed 0.90 to generic
+# terms like "infrastructure", "employment" and "agriculture" on a single hit.
+_STRONG_KEYWORDS: dict[str, set[str]] = {
+    "Healthcare": {"nhif", "sha", "hospitali", "dispensary", "mortuary", "doctors strike"},
+    "Education": {"kcse", "kcpe", "cbc", "tvet", "helb", "shule", "school fees"},
+    "Land & Housing": {"title deed", "affordable housing", "squatter", "land grabbing"},
+    "Water & Sanitation": {"borehole", "nwsc", "water rationing", "maji safi"},
+    "Roads & Transport": {"matatu", "sgr", "boda boda", "tarmac", "barabara"},
+    "Security & Police": {"gsu", "nps", "police brutality", "usalama", "banditry"},
+    "Corruption": {"eacc", "odpp", "ufisadi", "embezzlement", "graft"},
+    "Agriculture": {"kari", "asal", "fertiliser", "fertilizer", "mkulima", "extension officer"},
+    "Youth Unemployment": {"hustler fund", "jua kali", "tarmacking", "gen z", "ajira"},
+    "Taxation & Revenue": {"kra", "itax", "finance bill", "ushuru", "paye"},
+    "Devolution": {"mca", "cec", "county assembly", "equalization fund", "ugatuzi"},
+    "Food Security": {"wfp", "relief food", "njaa", "malnutrition", "subsidized maize"},
+}
+
+
 def detect_topics(text: str) -> list[tuple[str, float]]:
     """Return list of (topic, confidence) tuples found in text.
 
-    Confidence: 1 strong keyword match = 0.90, 2+ regular matches = 0.75,
-    1 regular match = 0.60. Strong keywords are those >= 8 chars (more specific).
+    Confidence: a strong keyword scores 0.90, two or more ordinary matches
+    0.75, a single ordinary match 0.60.
     """
-    text_lower = text.lower()
+    if not text:
+        return []
+
     results: list[tuple[str, float]] = []
-    for topic, keywords in _TOPIC_KEYWORDS.items():
-        matches = [kw for kw in keywords if kw in text_lower]
+    for topic, pattern in _PATTERNS.items():
+        matches = {m.group(0).lower() for m in pattern.finditer(text)}
         if not matches:
             continue
-        strong = [kw for kw in matches if len(kw) >= 8]
+
+        strong = matches & _STRONG_KEYWORDS.get(topic, set())
         if strong:
             confidence = 0.90
         elif len(matches) >= 2:

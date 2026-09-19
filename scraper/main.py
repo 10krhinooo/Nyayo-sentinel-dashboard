@@ -56,10 +56,20 @@ def run_pipeline() -> None:
         log.info("Scraping %s …", scraper.source_name)
         try:
             articles = scraper.fetch()
-            record_success(scraper.source_name, 0)
         except Exception as exc:
             log.warning("%s scraper raised: %s", scraper.source_name, exc)
             record_failure(scraper.source_name, str(exc))
+            continue
+
+        # Scrapers catch their own exceptions internally and return an empty
+        # list, so a total failure reached this point looking like a quiet day.
+        # Reddit and Instagram in particular reported healthy while fetching
+        # nothing at all. An empty result is now treated as a failure: a source
+        # that legitimately has no new articles still returns the ones it saw,
+        # and deduplication happens further down.
+        if not articles:
+            log.warning("%s returned no articles", scraper.source_name)
+            record_failure(scraper.source_name, "returned no articles")
             continue
 
         log.info("  %d articles fetched from %s", len(articles), scraper.source_name)
@@ -107,6 +117,7 @@ def run_pipeline() -> None:
                     "source":         article.source_name,
                     "timestamp":      article.published_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "volumeWeight":   1,
+                    "language":       lang,
                     "headline":       article.title[:220] if article.title else None,
                     "snippet":        article.body[:500]  if article.body  else None,
                 })

@@ -145,3 +145,33 @@ describe("POST /api/ingest/events", () => {
     expect(res.body.inserted).toBe(1);
   });
 });
+
+describe("forward compatibility", () => {
+  it("accepts an event carrying a field the schema does not know yet", async () => {
+    mockPrisma.county.findMany.mockResolvedValue([{ id: "c1", name: "nairobi", code: "047" }]);
+    mockPrisma.topic.findMany.mockResolvedValue([{ id: "t1", name: "corruption" }]);
+    mockPrisma.sentimentEvent.createMany.mockResolvedValue({ count: 1 });
+
+    const res = await request(app)
+      .post("/api/ingest/events")
+      .set("X-API-Key", VALID_KEY)
+      .send({
+        events: [
+          {
+            countyName: "Nairobi",
+            topicName: "Corruption",
+            sentimentScore: -0.5,
+            sentimentLabel: "NEGATIVE",
+            source: "rss",
+            // The scraper detects this and sends it; the column arrives with
+            // the country pack work. Until then it must be ignored, not
+            // rejected, or ingest breaks entirely.
+            language: "sw",
+          },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(mockPrisma.sentimentEvent.createMany).toHaveBeenCalled();
+  });
+});
