@@ -109,6 +109,8 @@ const thresholdSchema = z.object({
   metricType: z.nativeEnum(MetricType),
   thresholdVal: z.number().refine((v) => v > 0, { message: "thresholdVal must be positive" }),
   severity: z.nativeEnum(AlertSeverity),
+  minVolume: z.number().int().min(0).max(100000).optional(),
+  cooldownMinutes: z.number().int().min(0).max(10080).optional(),
   active: z.boolean().optional()
 }).superRefine((data, ctx) => {
   if (data.metricType === MetricType.NEGATIVE_PERCENT && (data.thresholdVal < 0 || data.thresholdVal > 100)) {
@@ -131,7 +133,11 @@ router.post(
         return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten().fieldErrors });
       }
 
-      const { countyId, topicId, metricType, thresholdVal, severity, active } = parsed.data;
+      const {
+        countyId, topicId, metricType, thresholdVal, severity, active,
+        minVolume, cooldownMinutes
+      } = parsed.data;
+
       const threshold = await prisma.alertThreshold.create({
         data: {
           countyId: countyId ?? null,
@@ -139,12 +145,26 @@ router.post(
           metricType,
           thresholdVal,
           severity,
-          active: active ?? true
+          active: active ?? true,
+          ...(minVolume !== undefined ? { minVolume } : {}),
+          ...(cooldownMinutes !== undefined ? { cooldownMinutes } : {})
         }
       });
 
       return res.status(201).json({ threshold });
-    } catch {
+    } catch (err) {
+      // Duplicate rules mean duplicate alerts and duplicate emails, so the
+      // database rejects them. Report that as a conflict rather than as an
+      // opaque server error.
+      if (
+        err &&
+        typeof err === "object" &&
+        (err as { code?: string }).code === "P2002"
+      ) {
+        return res.status(409).json({
+          message: "A threshold for this county, topic and metric already exists."
+        });
+      }
       return res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -233,16 +253,29 @@ router.get(
         .slice(0, 8)
         .map(([source, count]) => ({ source, count }));
 
+      // Prefer the values recorded when the rule fired. Alerts created before
+      // those columns existed fall back to parsing the summary, which is what
+      // the whole code path used to do and why a reworded string broke it.
       let triggerExplanation: string;
       if (alert.triggerType === TriggerType.THRESHOLD) {
-        const pct = total === 0 ? 0 : (100 * negCount) / total;
-        triggerExplanation = `${pct.toFixed(1)}% negative sentiment (${negCount} of ${total} events) exceeded the configured threshold in the 24-hour window.`;
+        const pct =
+          alert.observedValue ?? (total === 0 ? 0 : (100 * negCount) / total);
+        const observedCount = alert.eventCount ?? total;
+        triggerExplanation = `${pct.toFixed(1)}% negative sentiment (${negCount} of ${observedCount} events) exceeded the configured threshold${
+          alert.thresholdValue !== null && alert.thresholdValue !== undefined
+            ? ` of ${alert.thresholdValue}%`
+            : ""
+        } in the 24-hour window.`;
       } else {
-        const m = alert.summary.match(/factor\s+([\d.]+)/);
-        const factor = m ? parseFloat(m[1]) : null;
-        const baseline = factor ? Math.round(total / factor) : null;
+        const legacyMatch = alert.summary.match(/factor\s+([\d.]+)/);
+        const factor =
+          alert.observedValue ?? (legacyMatch ? parseFloat(legacyMatch[1]) : null);
+        const baseline =
+          alert.baselineValue ?? (factor ? Math.round(total / factor) : null);
         triggerExplanation = factor
-          ? `Volume spiked ${factor.toFixed(1)}× above 24-hour baseline (${total} vs ~${baseline} events).`
+          ? `Volume spiked ${factor.toFixed(1)}× above the 24-hour baseline (${
+              alert.eventCount ?? total
+            } vs ~${baseline} events).`
           : `Complaint volume spiked significantly in the 24-hour window (${total} events).`;
       }
 
@@ -258,6 +291,8 @@ router.get(
         sources,
         topicContext:       alert.topic?.name ? (TOPIC_CONTEXT[alert.topic.name] ?? null) : null,
         triggerExplanation,
+        occurrenceCount:    alert.occurrenceCount,
+        lastSeenAt:         alert.lastSeenAt,
         llmSummary:         alert.llmSummary ?? null
       });
     } catch {
@@ -266,185 +301,240 @@ router.get(
   }
 );
 
-export async function evaluateAlertThresholds(io?: import("socket.io").Server) {
-  const thresholds = await prisma.alertThreshold.findMany({
-    where: { active: true }
+/**
+ * Per (county, topic) aggregate over the evaluation windows.
+ *
+ * One row per pair, computed in a single pass, replacing the previous
+ * threshold x county loop that issued two counts plus a findMany per
+ * combination: roughly 282 round trips every five minutes at 6 thresholds
+ * across 47 counties.
+ */
+interface WindowAggregate {
+  countyId: string;
+  topicId: string;
+  recentTotal: number;
+  recentNegative: number;
+  recentScoreSum: number;
+  baselineTotal: number;
+}
+
+async function loadWindowAggregates(
+  recentFrom: Date,
+  baselineFrom: Date
+): Promise<WindowAggregate[]> {
+  const rows = await prisma.$queryRaw<
+    {
+      countyId: string;
+      topicId: string;
+      recent_total: bigint;
+      recent_negative: bigint;
+      recent_score_sum: number | null;
+      baseline_total: bigint;
+    }[]
+  >`
+    SELECT
+      "countyId",
+      "topicId",
+      COUNT(*) FILTER (WHERE "timestamp" >= ${recentFrom})                      AS recent_total,
+      COUNT(*) FILTER (WHERE "timestamp" >= ${recentFrom}
+                         AND "sentimentLabel" = 'NEGATIVE')                     AS recent_negative,
+      SUM("sentimentScore") FILTER (WHERE "timestamp" >= ${recentFrom})         AS recent_score_sum,
+      COUNT(*) FILTER (WHERE "timestamp" >= ${baselineFrom}
+                         AND "timestamp" < ${recentFrom})                       AS baseline_total
+    FROM "SentimentEvent"
+    WHERE "timestamp" >= ${baselineFrom}
+    GROUP BY "countyId", "topicId"`;
+
+  return rows.map((r) => ({
+    countyId: r.countyId,
+    topicId: r.topicId,
+    recentTotal: Number(r.recent_total),
+    recentNegative: Number(r.recent_negative),
+    recentScoreSum: Number(r.recent_score_sum ?? 0),
+    baselineTotal: Number(r.baseline_total)
+  }));
+}
+
+/** Collapses per-topic rows to a county total, for rules with no topic. */
+function foldToCounty(rows: WindowAggregate[]): Map<string, WindowAggregate> {
+  const byCounty = new Map<string, WindowAggregate>();
+  for (const r of rows) {
+    const acc = byCounty.get(r.countyId);
+    if (!acc) {
+      byCounty.set(r.countyId, { ...r, topicId: "" });
+      continue;
+    }
+    acc.recentTotal += r.recentTotal;
+    acc.recentNegative += r.recentNegative;
+    acc.recentScoreSum += r.recentScoreSum;
+    acc.baselineTotal += r.baselineTotal;
+  }
+  return byCounty;
+}
+
+/** Top sources for a fired alert, fetched only for combinations that fire. */
+async function sourceBreakdown(where: Prisma.SentimentEventWhereInput) {
+  const grouped = await prisma.sentimentEvent.groupBy({
+    by: ["source"],
+    where,
+    _count: { _all: true },
+    orderBy: { _count: { source: "desc" } },
+    take: 5
   });
+  return grouped.map((g) => ({ source: g.source, count: g._count._all }));
+}
+
+export interface EvaluationResult {
+  created: number;
+  suppressed: number;
+}
+
+export async function evaluateAlertThresholds(
+  io?: import("socket.io").Server
+): Promise<EvaluationResult> {
+  const thresholds = await prisma.alertThreshold.findMany({ where: { active: true } });
+  if (thresholds.length === 0) return { created: 0, suppressed: 0 };
 
   const now = new Date();
-  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const recentFrom = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const baselineFrom = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
 
-  // Fetch distinct county IDs once, reuse across all thresholds
-  const allCountyIds = (
-    await prisma.sentimentEvent.findMany({
-      where: { timestamp: { gte: oneDayAgo } },
-      select: { countyId: true },
-      distinct: ["countyId"]
-    })
-  ).map((r) => r.countyId);
+  const aggregates = await loadWindowAggregates(recentFrom, baselineFrom);
+  const byCounty = foldToCounty(aggregates);
+
+  let created = 0;
+  let suppressed = 0;
 
   for (const th of thresholds) {
-    const countyIdsToEvaluate = th.countyId ? [th.countyId] : allCountyIds;
+    // A rule with a topic reads the per-topic rows; a rule without one reads
+    // the county totals.
+    const candidates: WindowAggregate[] = th.topicId
+      ? aggregates.filter((a) => a.topicId === th.topicId)
+      : [...byCounty.values()];
 
-    if (th.metricType === MetricType.NEGATIVE_PERCENT) {
-      for (const countyId of countyIdsToEvaluate) {
-        const where: { timestamp: object; countyId: string; topicId?: string } = {
-          timestamp: { gte: oneDayAgo },
-          countyId
-        };
-        if (th.topicId) where.topicId = th.topicId;
+    const scoped = th.countyId
+      ? candidates.filter((a) => a.countyId === th.countyId)
+      : candidates;
 
-        const [negCount, totalCount] = await Promise.all([
-          prisma.sentimentEvent.count({
-            where: { ...where, sentimentLabel: "NEGATIVE" }
-          }),
-          prisma.sentimentEvent.count({ where })
-        ]);
+    for (const agg of scoped) {
+      const isSpike = th.metricType === MetricType.SPIKE_FACTOR;
 
-        const percent = totalCount === 0 ? 0 : (100 * negCount) / totalCount;
-        if (percent < th.thresholdVal) continue;
+      // Below this, ratios are dominated by sampling noise.
+      if (agg.recentTotal < th.minVolume) continue;
 
-        const existing = await prisma.alert.findFirst({
-          where: {
-            countyId,
-            topicId: th.topicId ?? null,
-            triggerType: TriggerType.THRESHOLD,
-            status: { in: [AlertStatus.OPEN, AlertStatus.ACKNOWLEDGED] }
+      let observed: number;
+      let baseline: number | null = null;
+
+      if (isSpike) {
+        if (agg.baselineTotal <= 0) continue;
+        baseline = agg.baselineTotal;
+        observed = agg.recentTotal / agg.baselineTotal;
+      } else {
+        observed = (100 * agg.recentNegative) / agg.recentTotal;
+      }
+
+      if (observed < th.thresholdVal) continue;
+
+      const triggerType = isSpike ? TriggerType.SPIKE : TriggerType.THRESHOLD;
+      const cooldownStart = new Date(now.getTime() - th.cooldownMinutes * 60 * 1000);
+
+      // Suppress on recency, not on status. Keying off OPEN or ACKNOWLEDGED
+      // meant an alert nobody ever resolved silenced that county and topic
+      // permanently.
+      const recent = await prisma.alert.findFirst({
+        where: {
+          countyId: agg.countyId,
+          topicId: th.topicId ?? null,
+          triggerType,
+          triggeredAt: { gte: cooldownStart }
+        },
+        orderBy: { triggeredAt: "desc" }
+      });
+
+      if (recent) {
+        // Still true, so record another occurrence rather than another row.
+        await prisma.alert.update({
+          where: { id: recent.id },
+          data: {
+            lastSeenAt: now,
+            occurrenceCount: { increment: 1 },
+            observedValue: observed
           }
         });
-        if (existing) continue;
-
-        const alert = await prisma.alert.create({
-          data: {
-            countyId,
-            topicId: th.topicId ?? null,
-            severity: th.severity,
-            triggerType: TriggerType.THRESHOLD,
-            summary: `Negative sentiment ${percent.toFixed(1)}% exceeded threshold ${th.thresholdVal}%`
-          },
-          include: { county: true, topic: true }
-        });
-
-        if (io) {
-          io.sockets.sockets.forEach((socket) => {
-            const socketUser = socket.data.user as
-              | { role?: UserRole; countyId?: string | null }
-              | undefined;
-            if (!socketUser) return;
-            if (isNationalRole(socketUser.role) || socketUser.countyId === countyId) {
-              socket.emit("alert:new", alert);
-            }
-          });
-        }
-
-        const rawThresholdEvents = await prisma.sentimentEvent.findMany({
-          where,
-          select: { sentimentScore: true, source: true }
-        });
-        const thAvgScore = rawThresholdEvents.length === 0
-          ? null
-          : rawThresholdEvents.reduce((s, e) => s + e.sentimentScore, 0) / rawThresholdEvents.length;
-        const thSrcMap = new Map<string, number>();
-        for (const e of rawThresholdEvents) thSrcMap.set(e.source, (thSrcMap.get(e.source) ?? 0) + 1);
-        const thresholdStats: AlertStats = {
-          eventCount:      totalCount,
-          negativeCount:   negCount,
-          negativePercent: totalCount === 0 ? 0 : Math.round((1000 * negCount) / totalCount) / 10,
-          avgScore:        thAvgScore !== null ? Math.round(thAvgScore * 100) / 100 : null,
-          sources:         [...thSrcMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([source, count]) => ({ source, count }))
-        };
-
-        void notifyAlertRecipients(alert, thresholdStats);
+        suppressed++;
+        continue;
       }
-    }
 
-    if (th.metricType === MetricType.SPIKE_FACTOR) {
-      const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
-      for (const countyId of countyIdsToEvaluate) {
-        const recentWhere: { timestamp: object; countyId: string; topicId?: string } = {
-          timestamp: { gte: oneDayAgo },
-          countyId
-        };
-        const baselineWhere: { timestamp: object; countyId: string; topicId?: string } = {
-          timestamp: { gte: twoDaysAgo, lt: oneDayAgo },
-          countyId
-        };
-        if (th.topicId) {
-          recentWhere.topicId = th.topicId;
-          baselineWhere.topicId = th.topicId;
-        }
+      const summary = isSpike
+        ? `Complaint volume spiked by factor ${observed.toFixed(2)} (threshold ${th.thresholdVal}x)`
+        : `Negative sentiment ${observed.toFixed(1)}% exceeded threshold ${th.thresholdVal}%`;
 
-        const [recentCount, baselineCount] = await Promise.all([
-          prisma.sentimentEvent.count({ where: recentWhere }),
-          prisma.sentimentEvent.count({ where: baselineWhere })
-        ]);
+      const alert = await prisma.alert.create({
+        data: {
+          countyId: agg.countyId,
+          topicId: th.topicId ?? null,
+          severity: th.severity,
+          triggerType,
+          summary,
+          metricType: th.metricType,
+          observedValue: observed,
+          thresholdValue: th.thresholdVal,
+          baselineValue: baseline,
+          eventCount: agg.recentTotal,
+          windowStart: recentFrom,
+          windowEnd: now,
+          thresholdId: th.id,
+          lastSeenAt: now
+        },
+        include: { county: true, topic: true }
+      });
+      created++;
 
-        if (baselineCount <= 0) continue;
-
-        const factor = recentCount / baselineCount;
-        if (factor < th.thresholdVal) continue;
-
-        const existing = await prisma.alert.findFirst({
-          where: {
-            countyId,
-            topicId: th.topicId ?? null,
-            triggerType: TriggerType.SPIKE,
-            status: { in: [AlertStatus.OPEN, AlertStatus.ACKNOWLEDGED] }
-          }
-        });
-        if (existing) continue;
-
-        const alert = await prisma.alert.create({
-          data: {
-            countyId,
-            topicId: th.topicId ?? null,
-            severity: th.severity,
-            triggerType: TriggerType.SPIKE,
-            summary: `Complaint volume spiked by factor ${factor.toFixed(2)} (threshold ${th.thresholdVal}x)`
-          },
-          include: { county: true, topic: true }
-        });
-
-        if (io) {
-          io.sockets.sockets.forEach((socket) => {
-            const socketUser = socket.data.user as
-              | { role?: UserRole; countyId?: string | null }
-              | undefined;
-            if (!socketUser) return;
-            if (isNationalRole(socketUser.role) || socketUser.countyId === countyId) {
-              socket.emit("alert:new", alert);
-            }
-          });
-        }
-
-        const [rawSpikeEvents, spikeNegCount] = await Promise.all([
-          prisma.sentimentEvent.findMany({
-            where: recentWhere,
-            select: { sentimentScore: true, source: true }
-          }),
-          prisma.sentimentEvent.count({ where: { ...recentWhere, sentimentLabel: "NEGATIVE" } })
-        ]);
-        const spikeAvgScore = rawSpikeEvents.length === 0
-          ? null
-          : rawSpikeEvents.reduce((s, e) => s + e.sentimentScore, 0) / rawSpikeEvents.length;
-        const spikeSrcMap = new Map<string, number>();
-        for (const e of rawSpikeEvents) spikeSrcMap.set(e.source, (spikeSrcMap.get(e.source) ?? 0) + 1);
-        const spikeStats: AlertStats = {
-          eventCount:      recentCount,
-          negativeCount:   spikeNegCount,
-          negativePercent: recentCount === 0 ? 0 : Math.round((1000 * spikeNegCount) / recentCount) / 10,
-          avgScore:        spikeAvgScore !== null ? Math.round(spikeAvgScore * 100) / 100 : null,
-          sources:         [...spikeSrcMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([source, count]) => ({ source, count }))
-        };
-
-        void notifyAlertRecipients(alert, spikeStats);
+      if (io) {
+        emitAlert(io, alert, agg.countyId);
       }
+
+      const statsWhere: Prisma.SentimentEventWhereInput = {
+        countyId: agg.countyId,
+        ...(th.topicId ? { topicId: th.topicId } : {}),
+        timestamp: { gte: recentFrom }
+      };
+
+      const stats: AlertStats = {
+        eventCount: agg.recentTotal,
+        negativeCount: agg.recentNegative,
+        negativePercent:
+          agg.recentTotal === 0
+            ? 0
+            : Math.round((1000 * agg.recentNegative) / agg.recentTotal) / 10,
+        avgScore:
+          agg.recentTotal === 0
+            ? null
+            : Math.round((agg.recentScoreSum / agg.recentTotal) * 100) / 100,
+        sources: await sourceBreakdown(statsWhere)
+      };
+
+      void notifyAlertRecipients(alert, stats);
     }
   }
+
+  return { created, suppressed };
+}
+
+function emitAlert(io: import("socket.io").Server, alert: unknown, countyId: string) {
+  io.sockets.sockets.forEach((socket) => {
+    const socketUser = socket.data.user as
+      | { role?: UserRole; countyId?: string | null }
+      | undefined;
+    if (!socketUser) return;
+    if (isNationalRole(socketUser.role) || socketUser.countyId === countyId) {
+      socket.emit("alert:new", alert);
+    }
+  });
 }
 
 async function notifyAlertRecipients(
-  alert: { id: string; countyId: string; topicId?: string | null; summary: string; severity: string; triggeredAt: Date; county?: { name: string } | null; topic?: { name: string } | null },
+  alert: { id: string; countyId: string; topicId?: string | null; summary: string; severity: string; triggerType: TriggerType; triggeredAt: Date; county?: { name: string } | null; topic?: { name: string } | null },
   stats?: AlertStats
 ) {
   const oneDayAgo = new Date(alert.triggeredAt.getTime() - 24 * 60 * 60 * 1000);
@@ -466,7 +556,7 @@ async function notifyAlertRecipients(
     ? await generateAlertSummary({
         county:      alert.county?.name ?? alert.countyId,
         topic:       alert.topic?.name ?? null,
-        triggerType: alert.summary.startsWith("Complaint volume") ? "SPIKE" : "THRESHOLD",
+        triggerType: alert.triggerType,
         stats,
         headlines
       })

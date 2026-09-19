@@ -149,9 +149,23 @@ model AlertThreshold {
   thresholdVal Float
   severity     AlertSeverity
   active       Boolean        @default(true)
+  /// Minimum events in the window before a rule may fire. A spike factor of
+  /// 5.0 computed from one event against five is noise, not a signal.
+  minVolume    Int            @default(20)
+  /// How long after firing the same county and topic stays suppressed.
+  /// Previously suppression lasted until the alert was resolved, so an alert
+  /// nobody closed silenced its county indefinitely.
+  cooldownMinutes Int         @default(360)
 
   county       County?        @relation(fields: [countyId], references: [id])
   topic        Topic?         @relation(fields: [topicId], references: [id])
+
+  /// Backed by UNIQUE NULLS NOT DISTINCT in the migration. Prisma cannot
+  /// express that, and its default treats nulls as distinct, so two "all
+  /// counties" rules would not collide here but do collide in the database.
+  /// The stricter behaviour is the intended one: null means "all".
+  @@unique([countyId, topicId, metricType], map: "AlertThreshold_scope_metric_key")
+  @@index([active])
 }
 
 enum MetricType {
@@ -176,6 +190,23 @@ model Alert {
   status       AlertStatus   @default(OPEN)
   summary      String
   llmSummary   String?
+
+  /// Structured record of what fired the rule. The values were previously
+  /// recoverable only by regexing the human-readable summary, which broke as
+  /// soon as anyone reworded it.
+  metricType     MetricType?
+  observedValue  Float?
+  thresholdValue Float?
+  baselineValue  Float?
+  eventCount     Int?
+  windowStart    DateTime?
+  windowEnd      DateTime?
+  thresholdId    String?
+
+  /// Re-triggering inside the cooldown bumps these instead of creating a
+  /// duplicate row, so a persistent condition reads as one ongoing alert.
+  lastSeenAt      DateTime?
+  occurrenceCount Int          @default(1)
 
   county       County        @relation(fields: [countyId], references: [id])
   topic        Topic?        @relation(fields: [topicId], references: [id])

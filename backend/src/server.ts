@@ -9,6 +9,7 @@ import { Server as SocketIOServer } from "socket.io";
 import jwt from "jsonwebtoken";
 import { doubleCsrf } from "csrf-csrf";
 import { env } from "./config/env";
+import { prisma } from "./lib/prisma";
 import { AuthUser } from "./types/auth";
 import authRoutes from "./routes/auth";
 import dashboardRoutes from "./routes/dashboard";
@@ -159,8 +160,30 @@ io.on("connection", (socket) => {
   console.log("WebSocket client connected", socket.id, "role:", socket.data.user?.role);
 });
 
+// Alert evaluation runs on every replica, so without coordination each one
+// creates the same alerts and sends the same emails. A session-level advisory
+// lock makes exactly one replica per tick do the work. This is the interim
+// guard; a proper job queue replaces the bare interval later.
+const ALERT_EVAL_LOCK = 8471023;
+
+async function runAlertEvaluation() {
+  const [{ locked }] = await prisma.$queryRaw<{ locked: boolean }[]>`
+    SELECT pg_try_advisory_lock(${ALERT_EVAL_LOCK}) AS locked`;
+
+  if (!locked) return;
+
+  try {
+    await evaluateAlertThresholds(io);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("Alert evaluation failed", err);
+  } finally {
+    await prisma.$queryRaw`SELECT pg_advisory_unlock(${ALERT_EVAL_LOCK})`;
+  }
+}
+
 setInterval(() => {
-  void evaluateAlertThresholds(io);
+  void runAlertEvaluation();
 }, 5 * 60 * 1000);
 
 server.listen(env.port, () => {
