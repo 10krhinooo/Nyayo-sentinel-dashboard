@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
@@ -7,6 +7,7 @@ import { prisma } from "../lib/prisma";
 import { env } from "../config/env";
 import { audit } from "../middleware/audit";
 import { authenticateOptional } from "../middleware/auth";
+import { hashToken, issueToken, generateOtp, MAX_OTP_ATTEMPTS } from "../lib/tokens";
 import {
   sendOtpEmail,
   sendWelcomeEmail,
@@ -27,12 +28,27 @@ function signTokens(user: { id: string; role: string; countyId: string | null })
     env.JWT_ACCESS_TOKEN_SECRET,
     { expiresIn: env.accessTokenTtlSeconds }
   );
+  // jti makes an individual refresh token identifiable, and therefore
+  // revocable. Without one a stolen token could not be distinguished from a
+  // legitimate one and stayed valid for its full lifetime.
   const refreshToken = jwt.sign(
-    { id: user.id },
+    { id: user.id, jti: randomUUID() },
     env.JWT_REFRESH_TOKEN_SECRET,
     { expiresIn: env.refreshTokenTtlSeconds }
   );
   return { accessToken, refreshToken };
+}
+
+/** Records a refresh token jti as spent so it cannot be replayed. */
+async function revokeRefreshToken(jti: string, userId: string, exp?: number) {
+  const expiresAt = exp
+    ? new Date(exp * 1000)
+    : new Date(Date.now() + env.refreshTokenTtlSeconds * 1000);
+  await prisma.revokedToken.upsert({
+    where: { jti },
+    update: {},
+    create: { jti, userId, expiresAt }
+  });
 }
 
 function setTokenCookies(res: import("express").Response, tokens: TokenPair) {
@@ -49,10 +65,6 @@ function setTokenCookies(res: import("express").Response, tokens: TokenPair) {
     sameSite: "strict",
     maxAge: env.refreshTokenTtlSeconds * 1000
   });
-}
-
-function generateOtp(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
 }
 
 const loginSchema = z.object({
@@ -88,9 +100,11 @@ router.post("/login", audit("LOGIN", "USER"), async (req, res) => {
       await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
       const tokens = signTokens(user);
       setTokenCookies(res, tokens);
+      // Tokens are delivered as httpOnly cookies only. Returning them in the
+      // body as well handed them to any script on the page, which is exactly
+      // what httpOnly exists to prevent.
       return res.json({
-        user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, countyId: user.countyId },
-        tokens
+        user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, countyId: user.countyId }
       });
     }
 
@@ -101,7 +115,7 @@ router.post("/login", audit("LOGIN", "USER"), async (req, res) => {
 
     await prisma.user.update({
       where: { id: user.id },
-      data: { otpCode: hashedCode, otpExpiry: expiry }
+      data: { otpCode: hashedCode, otpExpiry: expiry, otpAttempts: 0 }
     });
 
     await sendOtpEmail(email, code);
@@ -135,14 +149,34 @@ router.post("/verify-otp", audit("LOGIN", "USER"), async (req, res) => {
       return res.status(401).json({ message: "Verification code has expired. Please log in again." });
     }
 
+    // A six digit code has a million possibilities, which a rate limiter alone
+    // only slows down. Counting attempts bounds the search per issued code.
+    if (user.otpAttempts >= MAX_OTP_ATTEMPTS) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { otpCode: null, otpExpiry: null, otpAttempts: 0 }
+      });
+      return res.status(429).json({
+        message: "Too many incorrect codes. Please log in again to get a new one."
+      });
+    }
+
     const valid = await bcrypt.compare(otp, user.otpCode);
     if (!valid) {
+      const attempts = user.otpAttempts + 1;
+      await prisma.user.update({
+        where: { id: user.id },
+        data:
+          attempts >= MAX_OTP_ATTEMPTS
+            ? { otpCode: null, otpExpiry: null, otpAttempts: 0 }
+            : { otpAttempts: attempts }
+      });
       return res.status(401).json({ message: "Invalid verification code" });
     }
 
     await prisma.user.update({
       where: { id: user.id },
-      data: { otpCode: null, otpExpiry: null, lastLoginAt: new Date() }
+      data: { otpCode: null, otpExpiry: null, otpAttempts: 0, lastLoginAt: new Date() }
     });
 
     const tokens: TokenPair = signTokens(user);
@@ -156,8 +190,7 @@ router.post("/verify-otp", audit("LOGIN", "USER"), async (req, res) => {
         lastName: user.lastName,
         role: user.role,
         countyId: user.countyId
-      },
-      tokens
+      }
     });
   } catch {
     return res.status(500).json({ message: "Internal server error" });
@@ -178,8 +211,8 @@ router.post("/set-password", async (req, res) => {
     }
     const { token, password } = parsed.data;
 
-    const user = await prisma.user.findFirst({
-      where: { inviteToken: token }
+    const user = await prisma.user.findUnique({
+      where: { inviteTokenHash: hashToken(token) }
     });
 
     if (!user || !user.inviteTokenExpiry || user.inviteTokenExpiry < new Date()) {
@@ -191,7 +224,7 @@ router.post("/set-password", async (req, res) => {
       where: { id: user.id },
       data: {
         passwordHash,
-        inviteToken: null,
+        inviteTokenHash: null,
         inviteTokenExpiry: null,
         mustSetPassword: false
       }
@@ -221,11 +254,13 @@ router.post("/forgot-password", async (req, res) => {
     // Always return success to prevent enumeration
     const user = await prisma.user.findUnique({ where: { email } });
     if (user && !user.mustSetPassword) {
-      const token = randomUUID();
+      // The plaintext token goes out by email and is never persisted; only
+      // its hash is stored, so a database read cannot be replayed as a reset.
+      const { token, hash } = issueToken();
       const expiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
       await prisma.user.update({
         where: { id: user.id },
-        data: { resetToken: token, resetTokenExpiry: expiry }
+        data: { resetTokenHash: hash, resetTokenExpiry: expiry }
       });
       await sendPasswordResetEmail(email, token);
     }
@@ -250,7 +285,9 @@ router.post("/reset-password", async (req, res) => {
     }
     const { token, password } = parsed.data;
 
-    const user = await prisma.user.findFirst({ where: { resetToken: token } });
+    const user = await prisma.user.findUnique({
+      where: { resetTokenHash: hashToken(token) }
+    });
     if (!user || !user.resetTokenExpiry || user.resetTokenExpiry < new Date()) {
       return res.status(400).json({ message: "Invalid or expired reset link. Please request a new one." });
     }
@@ -258,7 +295,7 @@ router.post("/reset-password", async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
     await prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash, resetToken: null, resetTokenExpiry: null }
+      data: { passwordHash, resetTokenHash: null, resetTokenExpiry: null }
     });
 
     await sendPasswordChangedEmail(user.email);
@@ -271,29 +308,77 @@ router.post("/reset-password", async (req, res) => {
 
 router.post("/token/refresh", audit("TOKEN_REFRESH", "USER"), async (req, res) => {
   try {
-    const refreshToken =
-      (req as any).cookies?.nyayo_refresh_token as string | undefined
-      ?? (req.body as { refreshToken?: string }).refreshToken;
+    // Cookie only. The previous body fallback let a caller present a token
+    // from JavaScript, which defeats the point of the httpOnly cookie.
+    const refreshToken = (
+      req as Request & { cookies?: Record<string, string> }
+    ).cookies?.nyayo_refresh_token;
 
     if (!refreshToken) {
-      return res.status(400).json({ message: "Refresh token required" });
+      return res.status(401).json({ message: "Refresh token required" });
     }
 
-    const decoded = jwt.verify(refreshToken, env.JWT_REFRESH_TOKEN_SECRET) as { id: string };
+    const decoded = jwt.verify(refreshToken, env.JWT_REFRESH_TOKEN_SECRET) as {
+      id: string;
+      jti?: string;
+      exp?: number;
+    };
+
+    // Tokens issued before jti existed cannot be tracked, so they are refused
+    // rather than trusted. The holder simply logs in again.
+    if (!decoded.jti) {
+      return res.status(401).json({ message: "Invalid or expired refresh token" });
+    }
+
+    const spent = await prisma.revokedToken.findUnique({ where: { jti: decoded.jti } });
+    if (spent) {
+      // A replayed token means the token was captured, since the legitimate
+      // holder already exchanged it. Revoke the whole family.
+      await prisma.revokedToken.deleteMany({
+        where: { userId: decoded.id, expiresAt: { lt: new Date() } }
+      });
+      return res.status(401).json({ message: "Invalid or expired refresh token" });
+    }
+
     const user = await prisma.user.findUnique({ where: { id: decoded.id } });
     if (!user) {
       return res.status(401).json({ message: "Invalid token" });
     }
 
+    // Rotate: the presented token is spent the moment it is exchanged.
+    await revokeRefreshToken(decoded.jti, user.id, decoded.exp);
+
     const tokens = signTokens(user);
     setTokenCookies(res, tokens);
-    return res.json({ tokens });
+    return res.status(204).send();
   } catch {
     return res.status(401).json({ message: "Invalid or expired refresh token" });
   }
 });
 
-router.post("/logout", authenticateOptional(), audit("LOGOUT", "USER"), async (_req, res) => {
+router.post("/logout", authenticateOptional(), audit("LOGOUT", "USER"), async (req, res) => {
+  // Logout previously cleared cookies and nothing else, so a token already
+  // copied elsewhere kept working until it expired on its own.
+  const refreshToken = (
+    req as Request & { cookies?: Record<string, string> }
+  ).cookies?.nyayo_refresh_token;
+
+  if (refreshToken) {
+    try {
+      const decoded = jwt.verify(refreshToken, env.JWT_REFRESH_TOKEN_SECRET) as {
+        id: string;
+        jti?: string;
+        exp?: number;
+      };
+      if (decoded.jti) {
+        await revokeRefreshToken(decoded.jti, decoded.id, decoded.exp);
+      }
+    } catch {
+      // An expired or malformed token is already unusable; clearing the
+      // cookies below is all that is left to do.
+    }
+  }
+
   res.clearCookie("nyayo_access_token");
   res.clearCookie("nyayo_refresh_token");
   return res.status(204).send();

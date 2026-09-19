@@ -8,8 +8,14 @@ const envSchema = z.object({
   PORT: z.string().default("4000"),
   DATABASE_URL: z.string().url(),
 
-  JWT_ACCESS_TOKEN_SECRET: z.string(),
-  JWT_REFRESH_TOKEN_SECRET: z.string(),
+  // A short secret is brute-forceable offline from any issued token.
+  // SCRAPER_API_KEY was already held to this standard; the signing keys were
+  // bare strings, so a three character secret booted without complaint.
+  JWT_ACCESS_TOKEN_SECRET: z.string().min(32, "must be at least 32 characters"),
+  JWT_REFRESH_TOKEN_SECRET: z.string().min(32, "must be at least 32 characters"),
+  // Distinct from the signing keys: reusing one secret across two primitives
+  // means a weakness in either compromises both.
+  CSRF_SECRET: z.string().min(32, "must be at least 32 characters"),
   JWT_ACCESS_TOKEN_TTL: z.string().default("900"),
   JWT_REFRESH_TOKEN_TTL: z.string().default("604800"),
 
@@ -33,6 +39,17 @@ if (!parsed.success) {
   // eslint-disable-next-line no-console
   console.error("Environment validation failed", parsed.error.flatten().fieldErrors);
   throw new Error("Invalid environment configuration");
+}
+
+const distinctSecrets = new Set([
+  parsed.data.JWT_ACCESS_TOKEN_SECRET,
+  parsed.data.JWT_REFRESH_TOKEN_SECRET,
+  parsed.data.CSRF_SECRET
+]);
+if (distinctSecrets.size < 3) {
+  throw new Error(
+    "JWT_ACCESS_TOKEN_SECRET, JWT_REFRESH_TOKEN_SECRET and CSRF_SECRET must all differ"
+  );
 }
 
 export const env = {

@@ -22,6 +22,7 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/test_nyayo
       JWT_ACCESS_TOKEN_SECRET: ci-access-secret-not-used-outside-ci-0000
       JWT_REFRESH_TOKEN_SECRET: ci-refresh-secret-not-used-outside-ci-000
+      CSRF_SECRET: ci-csrf-secret-not-used-outside-ci-00000
       SCRAPER_API_KEY: ci-scraper-api-key-at-least-32-characters
     services:
       postgres:
