@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { logger } from "../lib/logger";
 import { env } from "../config/env";
 import { audit } from "../middleware/audit";
 import { authenticateOptional } from "../middleware/auth";
@@ -121,7 +122,8 @@ router.post("/login", audit("LOGIN", "USER"), async (req, res) => {
     await sendOtpEmail(email, code);
 
     return res.json({ requiresOtp: true });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Auth handler failed");
     return res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -192,7 +194,8 @@ router.post("/verify-otp", audit("LOGIN", "USER"), async (req, res) => {
         countyId: user.countyId
       }
     });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Auth handler failed");
     return res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -233,7 +236,8 @@ router.post("/set-password", async (req, res) => {
     await sendWelcomeEmail(user.email);
 
     return res.json({ success: true });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Auth handler failed");
     return res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -266,7 +270,8 @@ router.post("/forgot-password", async (req, res) => {
     }
 
     return res.json({ message: "If that email exists, a reset link has been sent." });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Auth handler failed");
     return res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -301,7 +306,8 @@ router.post("/reset-password", async (req, res) => {
     await sendPasswordChangedEmail(user.email);
 
     return res.json({ success: true });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Auth handler failed");
     return res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -351,7 +357,11 @@ router.post("/token/refresh", audit("TOKEN_REFRESH", "USER"), async (req, res) =
     const tokens = signTokens(user);
     setTokenCookies(res, tokens);
     return res.status(204).send();
-  } catch {
+  } catch (err) {
+    // An expired or tampered token is an ordinary outcome here, not a fault,
+    // so this is debug rather than error. It is still recorded, because a
+    // sudden rise in rejections is worth being able to see.
+    logger.debug({ err }, "Refresh token rejected");
     return res.status(401).json({ message: "Invalid or expired refresh token" });
   }
 });

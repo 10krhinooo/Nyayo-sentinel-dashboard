@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma";
+import { logger } from "../lib/logger";
 import { requireAuth } from "../middleware/auth";
 import { resolveScope } from "../middleware/scope";
 import { audit } from "../middleware/audit";
@@ -63,7 +64,8 @@ router.get(
       }
 
       return res.json({ topics: Object.values(byTopic) });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }

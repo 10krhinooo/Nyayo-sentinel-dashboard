@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { AlertSeverity, AlertStatus, MetricType, TriggerType, UserRole, Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
+import { logger } from "../lib/logger";
 import { requireAuth, requireRoles } from "../middleware/auth";
 import { resolveScope, countyWhere, canAccessCounty } from "../middleware/scope";
 
@@ -71,7 +72,8 @@ router.get(
       ]);
 
       return res.json({ alerts, total, page, limit });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -97,7 +99,8 @@ router.get(
         prisma.alertThreshold.count(),
       ]);
       return res.json({ thresholds, total, page, limit });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -207,7 +210,8 @@ router.patch(
         data: { status: parsed.data.status }
       });
       return res.json({ alert });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }
@@ -295,7 +299,8 @@ router.get(
         lastSeenAt:         alert.lastSeenAt,
         llmSummary:         alert.llmSummary ?? null
       });
-    } catch {
+    } catch (err) {
+      logger.error({ err }, "Request handler failed");
       return res.status(500).json({ message: "Internal server error" });
     }
   }

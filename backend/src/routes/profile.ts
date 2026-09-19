@@ -2,6 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { logger } from "../lib/logger";
 import { requireAuth } from "../middleware/auth";
 import { audit } from "../middleware/audit";
 import { sendPasswordChangedEmail } from "../services/email";
@@ -28,7 +29,8 @@ router.get("/", requireAuth(), async (req, res) => {
     });
     if (!user) return res.status(404).json({ message: "User not found" });
     return res.json({ user });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Request handler failed");
     return res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -55,7 +57,8 @@ router.patch("/", requireAuth(), audit("UPDATE_PROFILE", "USER"), async (req, re
       select: { id: true, email: true, firstName: true, lastName: true, role: true, countyId: true }
     });
     return res.json({ user });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Request handler failed");
     return res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -91,7 +94,8 @@ router.post("/change-password", requireAuth(), audit("CHANGE_PASSWORD", "USER"),
     await sendPasswordChangedEmail(user.email);
 
     return res.json({ success: true });
-  } catch {
+  } catch (err) {
+    logger.error({ err }, "Request handler failed");
     return res.status(500).json({ message: "Internal server error" });
   }
 });

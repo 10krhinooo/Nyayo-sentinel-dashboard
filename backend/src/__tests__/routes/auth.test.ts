@@ -10,6 +10,7 @@ const REFRESH_SECRET = "test-refresh-secret-at-least-32-chars";
 
 vi.mock("../../config/env", () => ({
   env: {
+    LOG_LEVEL: "silent",
     JWT_ACCESS_TOKEN_SECRET: ACCESS_SECRET,
     JWT_REFRESH_TOKEN_SECRET: REFRESH_SECRET,
     CSRF_SECRET: "test-csrf-secret-at-least-32-characters",

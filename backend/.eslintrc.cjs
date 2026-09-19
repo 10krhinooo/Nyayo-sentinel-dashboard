@@ -23,6 +23,12 @@ module.exports = {
   },
   overrides: [
     {
+      // Seed and other CLI scripts print progress for a human operator;
+      // console is the right output there, not the application logger.
+      files: ["prisma/**/*.ts"],
+      rules: { "no-console": "off" },
+    },
+    {
       files: ["src/__tests__/**/*.ts"],
       env: { node: true },
       rules: { "@typescript-eslint/no-explicit-any": "off" },

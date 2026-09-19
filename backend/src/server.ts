@@ -2,7 +2,6 @@ import http from "http";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import { rateLimit } from "express-rate-limit";
 import { Server as SocketIOServer } from "socket.io";
@@ -21,6 +20,11 @@ import usersRoutes from "./routes/users";
 import profileRoutes from "./routes/profile";
 import ingestRoutes from "./routes/ingest";
 import eventsRoutes from "./routes/events";
+import healthRoutes from "./routes/health";
+import { logger } from "./lib/logger";
+import { requestContext } from "./middleware/requestContext";
+import { errorHandler, notFound } from "./middleware/errorHandler";
+import { httpLogger } from "./middleware/httpLogger";
 
 const app = express();
 
@@ -31,7 +35,8 @@ app.use(
     credentials: true
   })
 );
-app.use(morgan("combined"));
+app.use(requestContext());
+app.use(httpLogger());
 app.use(express.json());
 app.use(cookieParser());
 
@@ -64,9 +69,7 @@ const { generateCsrfToken, doubleCsrfProtection } = doubleCsrf({
 
 app.use(doubleCsrfProtection);
 
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok" });
-});
+app.use("/health", healthRoutes);
 
 // Returns a fresh CSRF token; frontend calls this once after login
 app.get("/api/csrf-token", (req, res) => {
@@ -119,6 +122,10 @@ app.use("/api/profile", apiLimiter, profileRoutes);
 app.use("/api/ingest", ingestRoutes);
 app.use("/api/events", apiLimiter, eventsRoutes);
 
+// Must come after every route: 404 first, then the terminal error handler.
+app.use(notFound());
+app.use(errorHandler());
+
 const server = http.createServer(app);
 
 const io = new SocketIOServer(server, {
@@ -156,8 +163,7 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-  // eslint-disable-next-line no-console
-  console.log("WebSocket client connected", socket.id, "role:", socket.data.user?.role);
+  logger.debug({ socketId: socket.id, role: socket.data.user?.role }, "WebSocket client connected");
 });
 
 // Alert evaluation runs on every replica, so without coordination each one
@@ -175,18 +181,54 @@ async function runAlertEvaluation() {
   try {
     await evaluateAlertThresholds(io);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("Alert evaluation failed", err);
+    logger.error({ err }, "Alert evaluation failed");
   } finally {
     await prisma.$queryRaw`SELECT pg_advisory_unlock(${ALERT_EVAL_LOCK})`;
   }
 }
 
-setInterval(() => {
+const alertInterval = setInterval(() => {
   void runAlertEvaluation();
 }, 5 * 60 * 1000);
 
 server.listen(env.port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`Backend listening on port ${env.port}`);
+  logger.info({ port: env.port, env: env.NODE_ENV }, "Backend listening");
+});
+
+/**
+ * Stop accepting new work, let in-flight requests finish, then release
+ * resources. Without this the process died immediately on SIGTERM, cutting
+ * off requests mid-flight on every deploy.
+ */
+let shuttingDown = false;
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info({ signal }, "Shutting down");
+
+  const forceExit = setTimeout(() => {
+    logger.error("Shutdown timed out, exiting forcefully");
+    process.exit(1);
+  }, env.shutdownTimeoutMs);
+  forceExit.unref();
+
+  clearInterval(alertInterval);
+
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await io.close();
+  await prisma.$disconnect();
+
+  logger.info("Shutdown complete");
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
+
+process.on("unhandledRejection", (reason) => {
+  logger.error({ reason }, "Unhandled promise rejection");
+});
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "Uncaught exception, shutting down");
+  void shutdown("uncaughtException");
 });
